@@ -8,7 +8,7 @@ from purias_utils.rnn.model.input_nl import *
 from purias_utils.rnn.layers.dales import BinaryMaskRecurrent, BinaryMaskForward
 from purias_utils.rnn.layers.base import ZeroingWeightLayer, AbsWeightLayer
 
-from purias_utils.noise.ou import OrnsteinUhlenbeckProcess
+from purias_utils.ssm.process.noise import OrnsteinUhlenbeckProcess
 
 
 tau_eta = 0.1

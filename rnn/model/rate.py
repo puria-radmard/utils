@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from typing import Type
 
-from purias_utils.noise.base import NoiseProcess
+from purias_utils.ssm.process.base import ProcessBase
 from purias_utils.rnn.layers.base import WeightLayer
 
 

@@ -46,7 +46,7 @@ class AngularThresholdedTuningCurve(TuningCurveBase):
 
 class IndependentPoissonPopulationResponse:
     """
-        Assuming Poisson process with tuning curve mean, e.g. in rate_loglikelihoods
+        Assuming Poisson ProcessBase with tuning curve mean, e.g. in rate_loglikelihoods
     """
 
     def __init__(self, tuning_curves: List[TuningCurveBase], stimulus_dimension: int = None) -> None:
