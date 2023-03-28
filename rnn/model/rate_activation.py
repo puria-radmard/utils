@@ -2,7 +2,7 @@ from torch import Tensor as T
 from torch.nn import functional as F
 
 def make_rectified_power_law_activation_function(k, gamma):
-    def rectified_power_law_activation_function(u: T):
+    def drectified_power_law_activation_function(u: T):
         return k * (F.relu(u) ** gamma)
     rectified_power_law_activation_function.k = k
     rectified_power_law_activation_function.gamma = gamma

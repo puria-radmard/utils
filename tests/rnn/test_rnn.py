@@ -1,12 +1,12 @@
 import torch
 import unittest
 
-from purias_utils.dynamical_systems.rnn.rate import *
-from purias_utils.dynamical_systems.rnn.rate_activation import *
-from purias_utils.dynamical_systems.rnn.input_nl import *
+from purias_utils.rnn.model.rate import *
+from purias_utils.rnn.model.rate_activation import *
+from purias_utils.rnn.model.input_nl import *
 
-from purias_utils.dynamical_systems.layers.dales import BinaryMaskRecurrent, BinaryMaskForward
-from purias_utils.dynamical_systems.layers.base import ZeroingWeightLayer, AbsWeightLayer
+from purias_utils.rnn.layers.dales import BinaryMaskRecurrent, BinaryMaskForward
+from purias_utils.rnn.layers.base import ZeroingWeightLayer, AbsWeightLayer
 
 from purias_utils.noise.ou import OrnsteinUhlenbeckProcess
 
@@ -18,7 +18,7 @@ eps2=(2 * (dt/tau_eta))**0.5
 
 test_rnn_1 = RateRNN(
     rate_activation = make_rectified_power_law_activation_function(0.3, 2),
-    input_nonlinearity = make_linear_input_projection(),
+    input_nonlinearity = linear_input_projection(),
     tau_e=0.1,
     tau_i=0.05,
     min_u_value=200,

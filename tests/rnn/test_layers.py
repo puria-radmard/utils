@@ -1,8 +1,8 @@
 import torch
 import unittest
 
-from purias_utils.dynamical_systems.layers.base import WeightLayer, WeightLayerBase, AbsWeightLayer
-from purias_utils.dynamical_systems.layers.dales import BinaryMaskRecurrent, BinaryMaskForward
+from purias_utils.rnn.layers.base import WeightLayer, WeightLayerBase, AbsWeightLayer
+from purias_utils.rnn.layers.dales import BinaryMaskRecurrent, BinaryMaskForward
 
 
 class NegativeWeightLayer(WeightLayer):
