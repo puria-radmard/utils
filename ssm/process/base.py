@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 class ProcessBase(ABC):
 
     previous_value: T
+    parents: List[ProcessBase] = []
 
     @abstractmethod
     def __init__(self):
@@ -24,14 +25,24 @@ class ProcessBase(ABC):
     def generate(self, num_steps, *args, **kwargs):
         return torch.stack([self() for _ in range(num_steps)])
 
+    def add_parent(self, other: ProcessBase):
+        if other not in self.parents:
+            self.parents.append(other)
+
     def __add__(self, other: ProcessBase) -> ProcessFromFunction:
-        return ProcessFromFunction(lambda *a, **k: self(*a, **k) + other(*a, **k))
+        new_process = ProcessFromFunction(lambda *a, **k: self(*a, **k) + other(*a, **k))
+        new_process.add_parent(self)
+        new_process.add_parent(other)
 
     def __mult__(self, other: ProcessBase) -> ProcessFromFunction:
-        return ProcessFromFunction(lambda *a, **k: self(*a, **k) * other(*a, **k))
+        new_process = ProcessFromFunction(lambda *a, **k: self(*a, **k) * other(*a, **k))
+        new_process.add_parent(self)
+        new_process.add_parent(other)
 
     def __matmul__(self, other: ProcessBase) -> ProcessFromFunction:
-        return ProcessFromFunction(lambda *a, **k: self(*a, **k) @ other(*a, **k))
+        new_process = ProcessFromFunction(lambda *a, **k: self(*a, **k) @ other(*a, **k))
+        new_process.add_parent(self)
+        new_process.add_parent(other)
 
 
 class FlatProcess(ProcessBase):
