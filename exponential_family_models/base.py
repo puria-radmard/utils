@@ -101,6 +101,16 @@ class ExponentialFamilyPriorBase(ExponentialFamilyModelLayerBase):
         """
         raise NotImplementedError
 
+    def nabla_natural_parameter(self):
+        """
+            Derivative wrt parameter of generate_natural_parameter
+            Still seperated by batch remember!
+        """
+        inputs = self.raw_parameter_values()
+        func = lambda x: self.generate_natural_parameter_from_raw_parameters(raw_params=x, batch_size=1)
+        jac = jacobian(func=func, inputs=inputs)
+        return jac
+
     def generate_natural_parameter(self, batch_size: int):
         params = self.raw_parameter_values()
         return self.generate_natural_parameter_from_raw_parameters(params, batch_size)

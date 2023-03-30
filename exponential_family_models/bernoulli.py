@@ -4,7 +4,7 @@ from torch import Tensor as T
 
 from torch import sigmoid
 
-from exponential_family_models.base import ExponentialFamilyPriorBase, ExponentialFamilyModelLayerBase
+from purias_utils.exponential_family_models.base import ExponentialFamilyPriorBase, ExponentialFamilyModelLayerBase
 
 class LinearBernoulliPriorModelLayer(ExponentialFamilyPriorBase):
     """

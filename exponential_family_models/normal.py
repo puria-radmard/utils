@@ -4,7 +4,7 @@ from torch import Tensor as T
 
 from typing import List, Callable
 
-from exponential_family_models.base import *
+from purias_utils.exponential_family_models.base import *
 
 class MixtureOfGaussiansPriorModelLayer(ExponentialFamilyPriorBase):
     """
@@ -74,7 +74,7 @@ class MixtureOfScalarGaussiansModelLayer(ExponentialFamilyModelLayerBase):
         return torch.cat([mean, minus_half], dim = 1) / (sigma ** 2)
 
     def generate_sufficient_statistic(self, z: T):
-        return torch.tensor([z, z**2])
+        return torch.cat([z, z**2], axis = -1)
     
     def sample_conditional_from_natural_parameter(self, natural_parameter: T):
         min_half_over_sigma_squared = natural_parameter[:,1].unsqueeze(1)
@@ -119,17 +119,15 @@ class DiagonalConditionalGaussianModelLayer(ExponentialFamilyModelLayerBase):
     """
         Covariance is learned as a log, kept strictly diagonal
         Mean is some parameter matrix mean_multiplier @ z_prev (vector)
-        
-        TODO: figure out how gradients will work with a log parameter!
     """
 
     def __init__(self, output_dim: int, input_dim: int):
         super().__init__(output_dim)
         self.input_dim = input_dim
-        self.register_parameter(name='diagonal_sigma', param=torch.nn.Parameter(torch.randn(output_dim)))
+        self.register_parameter(name='log_diagonal_sigma', param=torch.nn.Parameter(torch.randn(output_dim)))
         self.register_parameter(name='mean_multiplier', param=torch.nn.Parameter(torch.randn(input_dim, output_dim)))
 
-    def generate_natural_parameter_from_raw_parameters(self, raw_params: T, z_prev: T):
+    def generate_natural_parameter_from_raw_parameters(self, raw_params: T, z_prev: T, flatten = True):
         N_out, N_in = self.output_dim, self.input_dim
         mean_multiplier = raw_params[:N_out * N_in].reshape(N_in, N_out)
         diagonal_sigma = raw_params[-N_out:]
@@ -137,21 +135,27 @@ class DiagonalConditionalGaussianModelLayer(ExponentialFamilyModelLayerBase):
         mean = z_prev @ mean_multiplier
         first_natural_parameter = (mean @ inverse_cov).unsqueeze(1)
         second_natural_parameter = -0.5*inverse_cov.unsqueeze(0).repeat(first_natural_parameter.shape[0], 1, 1)
-        return torch.cat([first_natural_parameter, second_natural_parameter], dim = 1)
+        result = torch.cat([first_natural_parameter, second_natural_parameter], dim = 1)
+        return result.reshape(z_prev.shape[0], -1) if flatten else result
     
-    def generate_sufficient_statistic(self, z: T):
-        z_squared = torch.outer(z, z)
-        return torch.cat([z, z_squared], dim = 1)
+    def generate_sufficient_statistic(self, z: T, flatten = True):
+        z_squared = z.unsqueeze(1) * z.unsqueeze(2)
+        result = torch.cat([z.unsqueeze(1), z_squared], dim = 1)
+        return result.reshape(z.shape[0], -1) if flatten else result
 
     def sample_conditional_from_natural_parameter(self, natural_parameter: Union[T, None]):
         "This will only work for diagonal inverse cov provided!! No asserts in place here!"
-        assert natural_parameter.shape[1:] == (self.output_dim + 1, self.output_dim)
+        if len(natural_parameter.shape) == 3:   # generated with flatten = False
+            assert natural_parameter.shape[1:] == (self.output_dim + 1, self.output_dim)
+        elif len(natural_parameter.shape) == 2: # generated with flatten = True
+            natural_parameter = natural_parameter.reshape(-1, self.output_dim + 1, self.output_dim)
         minus_over_half_inverse_cov = natural_parameter[:,1:]
         cov_matrix = torch.diag_embed(- 0.5 / batch_diag(minus_over_half_inverse_cov))
         mean_vector = torch.einsum('bnn, bn -> bn', cov_matrix, natural_parameter[:,0])
         cov_cholesky = cov_matrix**0.5
         rand_seed = torch.randn(natural_parameter.shape[0], self.output_dim)
-        return mean_vector + torch.einsum('bnn, bn -> bn', cov_cholesky, rand_seed)
+        result = mean_vector + torch.einsum('bnn, bn -> bn', cov_cholesky, rand_seed)
+        return result
 
     def mean(self, z_prev: Union[None, T]):
         "Conditional is easy, but marginal I'm not sure!"
@@ -165,14 +169,16 @@ class DiagonalConditionalGaussianModelLayer(ExponentialFamilyModelLayerBase):
                 z_prev = z_prev.reshape(-1, 1)
             return z_prev @ self.mean_multiplier
 
-    def mean_sufficient_statistic(self, z_prev: Union[None, T]):
+    def mean_sufficient_statistic(self, z_prev: Union[None, T], flatten = True):
         "Same comment as above! Expected value, then expected squared value"
         if z_prev is None:
             raise NotImplementedError
         else:
             conditional_mean = self.mean(z_prev)
-            conditional_power = torch.diag(self.diagonal_sigma.exp()) + torch.outer(conditional_mean, conditional_mean)
-            return torch.cat([conditional_mean, conditional_power], dim = 1)
+            mu_outer = conditional_mean.unsqueeze(2) @ conditional_mean.unsqueeze(1)
+            conditional_power = torch.diag(self.log_diagonal_sigma.exp()) + mu_outer
+            result = torch.cat([conditional_mean.unsqueeze(1), conditional_power], dim = 1)
+            return result.reshape(z_prev.shape[0], -1) if flatten else result
     
     def raw_parameter_values(self):
         """
@@ -182,14 +188,14 @@ class DiagonalConditionalGaussianModelLayer(ExponentialFamilyModelLayerBase):
         """
         return torch.cat([
             self.mean_multiplier.reshape(-1),
-            self.diagonal_sigma.exp()
+            self.log_diagonal_sigma
         ], dim = 0)
     
     def replace_raw_parameters(self, new_parameters: T):
         N_out, N_in = self.output_dim, self.input_dim
         assert tuple(new_parameters.shape) == (N_out * N_in + N_out,)
         self.mean_multiplier.data = new_parameters[:N_out * N_in].data.reshape(N_in, N_out)
-        self.diagonal_sigma.data = new_parameters[-N_out:].data
+        self.log_diagonal_sigma.data = new_parameters[-N_out:].data
 
 
 

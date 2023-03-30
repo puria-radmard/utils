@@ -1,6 +1,6 @@
 from torch.nn import ModuleList
 from typing import List
-from exponential_family_models.base import *
+from purias_utils.exponential_family_models.base import *
 
 
 class DeepExponentialFamilyGenerativeModel(nn.Module):

@@ -5,7 +5,7 @@ from torch.nn.functional import softplus
 
 from typing import Union
 
-from exponential_family_models.base import ExponentialFamilyModelLayerBase
+from purias_utils.exponential_family_models.base import ExponentialFamilyModelLayerBase
 
 
 class ZeroCenteredLinearSpreadLaplaceModelLayer(ExponentialFamilyModelLayerBase):
