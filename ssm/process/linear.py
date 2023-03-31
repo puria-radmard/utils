@@ -35,7 +35,8 @@ class LinearStateSpaceModel(ProcessBase):
         ar_term = self.dynamics_matrix_process.previous_value @ value_term
         input_term = self.input_process.previous_value
         noise_term = self.noise_process.previous_value
-        return ar_term + input_term + noise_term
+        self.previous_value = ar_term + input_term + noise_term
+        return self.previous_value
 
 
 

@@ -33,16 +33,19 @@ class ProcessBase(ABC):
         new_process = ProcessFromFunction(lambda *a, **k: self(*a, **k) + other(*a, **k))
         new_process.add_parent(self)
         new_process.add_parent(other)
+        return new_process
 
     def __mult__(self, other: ProcessBase) -> ProcessFromFunction:
         new_process = ProcessFromFunction(lambda *a, **k: self(*a, **k) * other(*a, **k))
         new_process.add_parent(self)
         new_process.add_parent(other)
+        return new_process
 
     def __matmul__(self, other: ProcessBase) -> ProcessFromFunction:
         new_process = ProcessFromFunction(lambda *a, **k: self(*a, **k) @ other(*a, **k))
         new_process.add_parent(self)
         new_process.add_parent(other)
+        return new_process
 
 
 class FlatProcess(ProcessBase):
