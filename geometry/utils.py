@@ -1,6 +1,6 @@
 import torch
 from typing import List, Callable, Union
-from geometry.topology import Points, BatchedPoints
+from purias_utils.geometry.topology import Points, BatchedPoints
 from torch.autograd.functional import jacobian as J
 
 from tqdm import tqdm

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from geometry.topology import *
-from geometry.utils import repeat_points_dimension, immerse_coordinates
+from purias_utils.geometry.topology import *
+from purias_utils.geometry.utils import repeat_points_dimension, immerse_coordinates
 
 
 class Embedding:

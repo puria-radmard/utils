@@ -1,5 +1,5 @@
-from geometry.topology import *
-from geometry.utils import differentiate
+from purias_utils.geometry.topology import *
+from purias_utils.geometry.utils import differentiate
 
 
 class SmoothCurveSet:
