@@ -1,37 +1,61 @@
 import torch
 from typing import List, Callable, Union
 from purias_utils.geometry.topology import Points, BatchedPoints
-from torch.autograd.functional import jacobian as J
+
+from torch.autograd import grad
+from torch import Tensor as T
 
 from tqdm import tqdm
 
 
 def compose_functions(ordered_functions):
     def inner(x):
-        output = Points(x)
+        output = x
         for func in ordered_functions[::-1]:
             output = func(output)
         return output
     return inner
 
 
-def differentiate(func: Callable[[Points], Points], eval_points: Union[Points, BatchedPoints]):
-    # TODO: Fix this! Use this: https://discuss.pytorch.org/t/computing-batch-jacobian-efficiently/80771
+def jacobian(y, x, create_graph=False):                                                               
+    jac = []                                                                                          
+    flat_y = y.reshape(-1)                                                                            
+    grad_y = torch.zeros_like(flat_y)                                                                 
+    for i in range(len(flat_y)):                                                                      
+        grad_y[i] = 1.                                                                                
+        grad_x, = grad(flat_y, x, grad_y, retain_graph=True, create_graph=create_graph)
+        jac.append(grad_x.reshape(x.shape))                                                           
+        grad_y[i] = 0.                                                                                
+    return torch.stack(jac).reshape(y.shape + x.shape)   
 
-    if isinstance(eval_points, BatchedPoints):
+
+def differentiate(evaluations: Callable[[Points], Points], eval_points: Union[Points, BatchedPoints, T]):
+    # TODO: make this way more efficient, and able to chain with drop off at each order
+
+    # TODO: fix this!!
+
+    evaluations = evaluations.coords
+
+    if isinstance(eval_points, BatchedPoints) or (eval_points.shape == 3):
         relevant_batch_jacobian = []
-        for point in tqdm(eval_points):
-            unwrapped_func = lambda x: func(x).coords
-            full_batch_jacobian = J(unwrapped_func, point.coords, create_graph=True).squeeze()
+        for evaluation, point in tqdm(zip(evaluations, eval_points)):
+            full_batch_jacobian = jacobian(evaluation, eval_points.coords, create_graph=True).squeeze()
             relevant_batch_jacobian.append(full_batch_jacobian)
         return torch.stack(relevant_batch_jacobian, 0)
 
-    else:
+    elif isinstance(eval_points, Points) or (eval_points.shape == 2):
         relevant_jacobian = []
-        unwrapped_func = lambda x: func(x).coords
-        full_jacobian = J(unwrapped_func, eval_points.coords, create_graph=True).squeeze()
+        full_jacobian = jacobian(evaluations, eval_points.coords, create_graph=True).squeeze()
         relevant_jacobian = torch.diagonal(torch.diagonal(full_jacobian, dim1=0, dim2=1))
         return relevant_jacobian
+
+
+def so_differentiate(func: Callable[[Points], Points], eval_points: Union[Points, BatchedPoints]):
+    # Hessian
+    inner = lambda x: differentiate(func, x)
+    return differentiate(inner, eval_points)
+
+
 
 
 def repeat_points_dimension(ps: Union[Points, BatchedPoints], repeat_dim: int, repeat_times: int):
@@ -53,6 +77,7 @@ def immerse_coordinates(ps: Union[Points, BatchedPoints], final_dim: int, used_d
 
     if used_dimensions is None:
         used_dimensions = list(range(ps.dim))
+    import pdb; pdb.set_trace()
     assert final_dim >= ps.dim
     assert len(used_dimensions) == ps.dim
 

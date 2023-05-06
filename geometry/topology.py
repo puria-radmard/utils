@@ -43,6 +43,10 @@ class Points:
         self.coords = point_coords
         self.num_points = point_coords.shape[0]
 
+    @property
+    def requires_grad(self):
+        return self.coords.requires_grad
+
     def slice_dims(self, i: int, i_end: Union[None, int] = None):
         return self.coords[:,[i]] if i_end is None else self.coords[:,i:i_end]
 
@@ -127,7 +131,7 @@ class RightRectangle:
             for lower, upper in zip(self.left, self.right)
         ]
 
-        return Points(tensor(list(itertools.product(*linspaces))))
+        return Points(tensor(list(itertools.product(*linspaces)), requires_grad=True))
 
     def cartesian_product(self, other: RightRectangle):
         return RightRectangle(
@@ -265,7 +269,7 @@ class Manifold(RightRectangle, Atlas):
         space with an Atlas
     """
 
-    def __init__(self, set_left: T, set_right: T, charts: List[Chart]):
+    def __init__(self, set_left: T, set_right: T, charts: List[Chart], grid_count = 100):
 
         RightRectangle.__init__(
             self, left=set_left, right=set_right
@@ -274,6 +278,10 @@ class Manifold(RightRectangle, Atlas):
 
         for chart in charts:
             assert self.contains(chart.domain) and (chart.domain.dim == self.dim)
+
+        self.grid_count = grid_count
+        self._grid_points = None     # Don't generate until needed 
+        self._charted_grid_points = None     # Don't generate until needed 
 
     @classmethod
     def from_set_and_atlas(cls, underlying_set: RightRectangle, atlas: Atlas):
@@ -287,3 +295,16 @@ class Manifold(RightRectangle, Atlas):
         new_underlying_set = RightRectangle.cartesian_product(self, other)
         new_atlas = self.cartesian_product_charts(other)
         return Manifold.from_set_and_atlas(new_underlying_set, new_atlas)
+
+    @property
+    def grid_points(self):
+        if self._grid_points is None:
+            self._grid_points = self.generate_grid(self.grid_count)
+        return self._grid_points
+
+    @property
+    def charted_grid_points(self):
+        "NB: some of these will be NaN, as they do not fall in the charts. TODO: deal with this!"
+        if self._charted_grid_points is None:
+            self._charted_grid_points = self.map(self.grid_points)
+        return self._charted_grid_points

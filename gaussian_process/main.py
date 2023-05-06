@@ -49,10 +49,13 @@ class GaussianProcessFit(nn.Module):
             (n * math.log(2 * torch.pi))
         )
 
-    def fit_prior(self, data_features: T, data_outputs: T, optim: Optimizer = None, num_steps: int = 10000, num_repeats: int = 10):
+    def fit_prior(self, data_features: T, data_outputs: T, optim: Optimizer = None, num_steps: int = 10000, num_repeats: int = 10, show_losses = False, reset=True):
         """
             Fit the parameters of the prior kernel to some data
         """
+        if reset:
+            self.reset_state_dict()
+        print(self.prior.log_dimension_lengths.data.exp().item(), self.prior.log_primary_length.data.exp().item())
         best_nll = float('inf')
         loss_curves = []
         if optim is None:
@@ -61,12 +64,14 @@ class GaussianProcessFit(nn.Module):
             print(f'Fitting GP - repeat {rep+1}')
             new_loss_curve = [self.nll(data_features, data_outputs).item()]
             self.reset_state_dict()
-            for _ in tqdm(range(num_steps)):
+            for t in tqdm(range(num_steps)):
                 optim.zero_grad()
                 nll = self.nll(data_features, data_outputs)
                 new_loss_curve.append(nll.item())
                 nll.backward()
                 optim.step()
+                if show_losses:
+                    print(t, '\t', nll.item())
             loss_curves.append(new_loss_curve)
             if new_loss_curve[-1] < best_nll:
                 best_nll = new_loss_curve[-1]
@@ -89,7 +94,7 @@ class GaussianProcessFit(nn.Module):
                 for one time use
         """
         assert tuple(data_outputs.shape) == (data_features.shape[0], )   # Scalar!
-        noise_matrix = self.log_noise_variance.exp() * torch.eye(data_features.shape[0])
+        noise_matrix = self.log_noise_variance.exp()  * torch.eye(data_features.shape[0])
         K = self.prior.correlation_matrix(data_features)
         noisy_cov_inv = torch.linalg.inv(K + noise_matrix)
         if keep:
@@ -99,6 +104,15 @@ class GaussianProcessFit(nn.Module):
             self.posterior_fitted = True
         else:
             return {"K": K, "noisy_cov_inv": noisy_cov_inv, "noise_matrix": noise_matrix}
+
+    @staticmethod
+    def make_matrix_psd(matrix):
+        ## TODO: make this its own thing!
+        eigenvals, eigenvecs = torch.linalg.eig(matrix)
+        eigenvals = torch.relu(eigenvals.real) + 1j*eigenvals.imag
+        lamb = torch.diag(eigenvals)
+        low_rank = eigenvecs @ lamb @ eigenvecs.T
+        return low_rank.real
 
     def predictive_distribution(self, data):
         """
@@ -113,18 +127,15 @@ class GaussianProcessFit(nn.Module):
         prior_cov = self.prior.correlation_matrix(data, data)
         K_post = prior_cov - (kernel_vector @ self.noisy_cov_inv @ kernel_vector.T)
 
+        import pdb; pdb.set_trace()
+        # torch.linalg.cholesky(prior_cov)
+
         return {'m_post': m_post, 'K_post': K_post}
 
-    def sample_from_posterior(self, data: T = None, m_post: T = None, K_post: T = None):
-        if data is None:
-            assert (m_post is not None) and (K_post is not None)
-            pred_moments = self.predictive_distribution(data)
-            m_post = pred_moments['m_post']
-            K_post = pred_moments['K_post']
-        else:
-            assert (m_post is None) and (K_post is None)
-
-        seed = torch.randn(data.shape[0], device=data.device)
-        cov_chol = torch.linalg.cholesky(K_post)
+    def sample_from_posterior(self, m_post: T, K_post: T, make_K_post_psd= False):
+        if make_K_post_psd:
+            K_post = self.make_matrix_psd(K_post)
+        seed = torch.randn(m_post.shape[0], device=m_post.device)
+        cov_chol = torch.linalg.cholesky(K_post)# + 1e-1 * torch.eye(K_post.shape[0]))
         return (cov_chol @ seed) + m_post
 

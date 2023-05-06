@@ -79,8 +79,43 @@ class BasisSetAtPoint(SmoothCurveSet):
         return self.gamma_dot(self.eval_ts)
 
 
+class ChartBasisCurveGenerator:
+    """
+    Provide to this object:
+        domain - supposed to be the codomain of a chart, i.e. x(U) in Claudi and Branco 2022
+
+    See TangentField docstring for proper documentation (this used to be there)
+    """
+
+    def __init__(self, domain: RightRectangle) -> None:
+        self.domain = domain
+
+    def evaluate_basis_curves(self, points: Union[Points, T]):
+        """
+        Evaluate without differentiating, allowing future Jacobian calculation, namely
+        when composed with an embedding
+
+        As name suggests, these are just coordinates (e.g. in x(U)), not the directional vector
+
+        For p points in, the output will a BatchedPoints object with shape [p, d, d]
+            p because of the batch size
+            first d because you need that many basis coordinates to define x(U)
+            second d because the basis coordinates that define x(U) have that dimensionality
+        """
+        all_curve_evaluations = []
+        for eval_point in points:
+            # TODO: BATCH THIS AT THE BasisSetAtPoint LEVEL TOO!
+            basis_set = BasisSetAtPoint(eval_point, codomain=self.domain)
+            basis_coords = basis_set.gamma(basis_set.eval_ts.coords)
+            all_curve_evaluations.append(basis_coords.coords)
+            # eval_point.coords, basis_coords.coords
+        return BatchedPoints(torch.stack(all_curve_evaluations, 0))
+
+
 class TangentField:
     """
+    NB: some of this docstring is now talking about ChartBasisCurveGenerator
+
     This is a kinda redundant way of defining vector fields, but it
     allows us to take full advantage of torch autograd if we need it.
 
@@ -110,27 +145,6 @@ class TangentField:
         self.vector_field = vector_field
         self.domain = domain
 
-    def evaluate_unweighted_basis_coordinates(self, points: Union[Points, T]):
-        """
-        Evaluate without differentiating, allowing future Jacobian calculation, namely
-        when composed with an embedding
-
-        As name suggests, these are just coordinates (e.g. in x(U)), not the directional vector
-
-        For p points in, the output will a BatchedPoints object with shape [p, d, d]
-            p because of the batch size
-            first d because you need that many basis coordinates to define x(U)
-            second d because the basis coordinates that define x(U) have that dimensionality
-        """
-        all_curve_evaluations = []
-        for eval_point in points:
-            # TODO: BATCH THIS AT THE BasisSetAtPoint LEVEL TOO!
-            basis_set = BasisSetAtPoint(eval_point, codomain=self.domain)
-            basis_coords = basis_set.gamma(basis_set.eval_ts.coords)
-            all_curve_evaluations.append(basis_coords.coords)
-            # eval_point.coords, basis_coords.coords
-        return BatchedPoints(torch.stack(all_curve_evaluations, 0))
-
     def weight_jacobian(self, charted_points: Union[Points, T], embedded_basis_jacobian: Union[Points, T]):
         """
         TESTING
@@ -146,6 +160,8 @@ class TangentField:
         if isinstance(embedded_basis_jacobian, Points):
             embedded_basis_jacobian = embedded_basis_jacobian.coords
 
+        assert charted_points.coords.shape[-1] == self.domain.dim
+
         # In case the manifold is 1D, make the Jacobian the right shape
         embedded_basis_jacobian = embedded_basis_jacobian.reshape(
             *embedded_basis_jacobian.shape[:2], -1
@@ -153,7 +169,20 @@ class TangentField:
 
         tangent_vectors = self.vector_field(charted_points).coords
 
+        # Rare special case of a 1-manifold embedded into an 1D space
+        if len(embedded_basis_jacobian.shape) == 2:
+            assert embedded_basis_jacobian.shape[-1] == 1
+            embedded_basis_jacobian = embedded_basis_jacobian.unsqueeze(1)
+        
         return torch.einsum('bdm,bm->bd', embedded_basis_jacobian, tangent_vectors)
 
 
-        
+    def weight_hessian(self, charted_points: Union[Points, T], embedded_basis_hessian: Union[Points, T]):
+        if isinstance(charted_points, T):
+            charted_points = Points(charted_points)
+        if isinstance(embedded_basis_jacobian, Points):
+            embedded_basis_jacobian = embedded_basis_jacobian.coords
+
+        assert charted_points.coords.shape[-1] == self.domain.dim
+
+    
