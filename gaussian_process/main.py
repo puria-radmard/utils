@@ -126,8 +126,6 @@ class GaussianProcessFit(nn.Module):
 
         prior_cov = self.prior.correlation_matrix(data, data)
         K_post = prior_cov - (kernel_vector @ self.noisy_cov_inv @ kernel_vector.T)
-
-        import pdb; pdb.set_trace()
         # torch.linalg.cholesky(prior_cov)
 
         return {'m_post': m_post, 'K_post': K_post}
