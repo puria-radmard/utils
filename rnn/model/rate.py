@@ -28,13 +28,13 @@ class RateRNN(nn.Module):
         input_nonlinearity: callable,
         tau_e: float,
         tau_i: float,
-        min_e_value: float,
-        max_e_value: float,
-        min_i_value: float,
-        max_i_value: float,
         noise_process: ProcessBase,
-        num_trials: int,
         device = 'cuda',
+        num_trials: int = 1,
+        min_e_value: float = None,
+        max_e_value: float = None,
+        min_i_value: float = None,
+        max_i_value: float = None,
         **parameters: Type[WeightLayer],
     ):
 
@@ -48,9 +48,9 @@ class RateRNN(nn.Module):
         self.tau_e = tau_e
         self.tau_i = tau_i
         self.min_e_value = min_e_value if min_e_value is not None else -float('inf')
-        self.max_e_value = max_e_value if max_e_value is not None else -float('inf')
+        self.max_e_value = max_e_value if max_e_value is not None else float('inf')
         self.min_i_value = min_i_value if min_i_value is not None else -float('inf')
-        self.max_i_value = max_i_value if max_i_value is not None else -float('inf')
+        self.max_i_value = max_i_value if max_i_value is not None else float('inf')
         self.noise_process = noise_process
         self.num_trials = num_trials
 
@@ -94,7 +94,7 @@ class RateRNN(nn.Module):
     def run_dynamics(self, u0: T, h: T, eta0: T, dt: float, burn_in: bool, num_steps: int, enable_tqdm=False, return_differential=False):
         self.train(not burn_in)
         assert len(h.shape) == 2, "Can only accept 2 axis inputs to SSN"
-        f = self.input_nonlinearity(self, h.unsqueeze(-1)).repeat(1, 1, self.num_trials)
+        f = self.input_nonlinearity(h.unsqueeze(-1)).repeat(1, 1, self.num_trials)
         u_history = []
         du_dt_history = []
         tau_inv = self.tau_inv_matrix
