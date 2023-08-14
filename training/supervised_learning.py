@@ -29,15 +29,18 @@ class AngleLoss(Module):
         assert target.shape == (input.shape[0], 2 if self.fixation else 1)
         
         xy_output = input[:,1:] if self.fixation else input
-        angles = torch.arctan2(*xy_output.T) # MIGHT CAUSE X-Y SWAPPED
-        loss_grid = 1 - (angles - target[:,1]).cos()
+        angles = torch.arctan2(*xy_output.T) # MIGHT CAUSE X-Y SWAPPED WHEN PLOTTED
+        angle_target = target[:,1] if self.fixation else target[:,0]
+        loss_grid = 1 - (angles - angle_target).cos()
 
-        if self.magnitude_regulariser_weight != 0:
-            loss_grid += self.magnitude_regulariser_weight * (xy_output[:,0]**2 +  xy_output[:,1]**2)        
+        if self.magnitude_regulariser_weight > 0:
+            mags = (xy_output[:,0]**2 +  xy_output[:,1]**2)**0.5
+            mag_loss = self.magnitude_regulariser_weight * torch.mean((mags - 1.0)**2)
+        else:
+            mag_loss = 0.0
 
         if self.fixation:
             fix_loss_grid = torch.binary_cross_entropy_with_logits(input[:,0], target[:,0])
             loss_grid = torch.stack([fix_loss_grid, loss_grid], axis = 1)
 
-        return loss_grid
-
+        return loss_grid, mag_loss

@@ -16,14 +16,19 @@ class DDCStyleStimulusCombiner(nn.Module):
     """
     Like a DDC, with p(m) = uniform, as noted in comments
     """
-    def __init__(self, sensory_pop_size, output_size, dt = 0.001):
+    def __init__(self, sensory_pop_size, output_size, identity_project = False):
         super(DDCStyleStimulusCombiner, self).__init__()
-        self.projection_weights = nn.Linear(sensory_pop_size, output_size, bias = False)
-        self.nonlin = nn.Tanh()
-        self.dt = dt
+
+        if identity_project:
+            self.input_projection = nn.Identity()
+            assert output_size == sensory_pop_size
+        else:
+            self.input_projection = nn.Sequential(
+                nn.Linear(sensory_pop_size, output_size, bias = False),
+                nn.Tanh()
+            )
 
         fixation_token = torch.randn(output_size) / output_size
-
         self.register_parameter(name='fixation_token', param = torch.nn.parameter.Parameter(fixation_token))
 
     def forward(self, sensory_response: T, add_fixation: T):
@@ -32,7 +37,7 @@ class DDCStyleStimulusCombiner(nn.Module):
         assert not sensory_response.requires_grad
 
         # Project and apply nonlinearity to each response
-        stimulus_responses = self.nonlin(self.projection_weights(sensory_response))
+        stimulus_responses = self.input_projection(sensory_response)
 
         # Mean over functions, with a uniform likelihood over tuning curves for now
         stimulus_response = stimulus_responses.mean(1)
@@ -127,7 +132,7 @@ class StripyStimulusCombiner(nn.Module):
 
         assert 0. <= alpha <= 1.
 
-        fixation_token = torch.randn(output_size) / output_size
+        fixation_token = torch.randn(output_size) / sensory_pop_size
         self.register_parameter(name='fixation_token', param = torch.nn.parameter.Parameter(fixation_token))
         
         id_mat = np.eye(num_stimuli * sensory_pop_size)
@@ -144,9 +149,13 @@ class StripyStimulusCombiner(nn.Module):
             input_weight = nn.init.xavier_uniform(torch.zeros(num_stimuli * sensory_pop_size, output_size))
             self.register_parameter(name='input_weight', param = torch.nn.parameter.Parameter(input_weight))
 
+    def cuda(self: T, device = None):
+        self.combining_matrix = self.combining_matrix.cuda()
+        return super().cuda(device)
+
     def forward(self, sensory_input, add_fixation: bool):
         "sensory_input should come in [batch, stim, pop]"
-        
+
         # Stack individual stimuli responses for each case -> [batch, stim * pop]
         stacked_inputs = torch.stack(
                 [torch.concat(list(batch_item), dim=0
@@ -158,9 +167,9 @@ class StripyStimulusCombiner(nn.Module):
         combined_inputs = stacked_inputs @ self.combining_matrix.float()
 
         # Project to hidden space
-        projection = combined_inputs @ self.input_weight
+        projection = combined_inputs.to(self.input_weight.device) @ self.input_weight
 
         if add_fixation:
             projection += self.fixation_token
-        
+
         return projection

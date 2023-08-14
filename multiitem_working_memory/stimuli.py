@@ -11,6 +11,7 @@ from torch import Tensor as T
 from typing import Any, Tuple
 
 
+
 def random_location(lower_x, upper_x, lower_y=None, upper_y=None):
     lower_y = lower_y or lower_x
     upper_y = upper_y or upper_x
@@ -57,10 +58,9 @@ class Orientation(CiruclarFeatureBase):
     def alter_image(self, image):
         raise NotImplementedError
 
-class Colour(CiruclarFeatureBase):
-    name = 'colour'
-    def to_rgb(self, s=1, v=1, scale_255 = False):
-        h = self.value / pi * 180
+
+def rot_to_rgb(rot, s=1, v=1, scale_255 = False):
+        h = rot / pi * 180
         s = float(s)
         v = float(v)
         h60 = h / 60.0
@@ -83,7 +83,13 @@ class Colour(CiruclarFeatureBase):
         elif hi == 5: r, g, b = v, p, q
         if scale_255:
             r, g, b = int(r * 255), int(g * 255), int(b * 255)
-        return r, g, b
+        return tuple(float(x) for x in (r, g, b))
+
+class Colour(CiruclarFeatureBase):
+    name = 'colour'
+    def to_rgb(self, s=1, v=1, scale_255 = False):
+        return rot_to_rgb(rot = self.value, s=s, v=v, scale_255 = scale_255)
+
     def alter_image(self, image):
         r,g,b = self.to_rgb()
         image[:,:,0] = r

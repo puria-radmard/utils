@@ -13,6 +13,7 @@ from purias_utils.multiitem_working_memory.stimuli import *
 
 class Stimulus:
 
+    set_size: int = 1
     num_feature_dims: int
     total_size: float
     feature_order = ['colour', 'orientation']
@@ -21,6 +22,10 @@ class Stimulus:
         self.num_feature_dims = len(args)
         self.features = {f.name: f for f in args}
         self.total_size = total_size
+    
+    @property
+    def stimuli(self):
+        return [self]
     
     def generate_image(self, ):
         canvas = torch.zeros(self.total_size, self.total_size, 3)
@@ -46,6 +51,16 @@ class Stimulus:
         new_stim.features[feature_name] = new_stim.features[feature_name].set(*args, **kwargs)
         return new_stim
 
+    def generate_image_board(self):
+        raise NotImplementedError
+
+    def feature_batch(self, feature_name):
+        torch.tensor(self.features[feature_name].value)
+        feature_batch = torch.tensor(
+            [stim.features[feature_name].value for stim in self.stimuli]
+        ).unsqueeze(-1)
+        return feature_batch
+
 
 class StimulusBoardBase:
 
@@ -56,7 +71,7 @@ class StimulusBoardBase:
     background: Tuple[float] = (0.5, 0.5, 0.5)
 
     def generate_image_board(self):
-        canvas = torch.zeros(self.board_size, self.board_size, 3)
+        canvas = torch.zeros(*self.board_size, 3)
         for i in range(3):
             canvas[:,:,i] = self.background[i]
         for stim in self.stimuli:
@@ -75,15 +90,21 @@ class StimulusBoardBase:
         # TODO: check this! i.e. stimuli now independent?
         return deepcopy(self)
 
+    def make_cue_board(self, idx):
+        raise NotImplementedError
+    
+    def make_all_cue_boards(self):
+        return [self.make_cue_board(i) for i in range(self.set_size)]
+
 
 
 class ColouredSquaresBoard(StimulusBoardBase):
     "Simplest stimulus board, randomly generated"
-    def __init__(self, set_lower, set_upper, board_size = 32, stim_size = 3, loc_border = 2.5, background = (0.5, 0.5, 0.5)) -> None:
+    def __init__(self, set_lower, set_upper, board_x_size = 32, board_y_size = 32, stim_size = 3, loc_border = 2.5, background = (0.5, 0.5, 0.5)) -> None:
         
         self.loc_border = loc_border
         self.stim_size = stim_size
-        self.board_size = board_size
+        self.board_size = (board_x_size, board_y_size)
         self.num_feature_dims = 2
         target_set_size = random.randint(set_lower, set_upper)
 
@@ -99,7 +120,7 @@ class ColouredSquaresBoard(StimulusBoardBase):
             counter = 0
             while not ver:
                 # new_location = Location(random_location(stim_radius, self.board_size - stim_radius))
-                new_location = Location(random_location(stim_radius, self.board_size - stim_radius))
+                new_location = Location(random_location(stim_radius, self.board_size[0] - stim_radius, stim_radius, self.board_size[1] - stim_radius))
                 ver = self.verify_location(new_location)
                 counter += 1
                 if counter > 1000:  # This should definitely get fixed....
@@ -122,4 +143,12 @@ class ColouredSquaresBoard(StimulusBoardBase):
                 return False
         return True
 
+    def make_cue_board(self, idx):
+        copied_board = self.copy()
+        for i in range(len(copied_board.stimuli)):
+            # ALL of these should be changed, no clues given
+            changed_stim = copied_board.stimuli[i].change('colour', float('nan'))
+            changed_stim = changed_stim.set('location', *copied_board.stimuli[idx].features['location'].value)
+            copied_board.stimuli[i] = changed_stim
+        return copied_board
 

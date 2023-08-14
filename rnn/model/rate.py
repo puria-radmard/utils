@@ -56,7 +56,7 @@ class RateRNN(nn.Module):
 
         for k, v in parameters.items():
             assert isinstance(v, WeightLayer)
-            self.add_module(k, v)
+            self.add_module(k, v.to(device))
 
         # For clipping use, TODO: properorty setter for any of these
         u_max = torch.ones(1, self.W_rec.num_neurons, 1)
