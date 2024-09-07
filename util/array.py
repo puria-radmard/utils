@@ -1,10 +1,10 @@
 import itertools
 import torch, math
-from torch import Tensor as T
+from torch import Tensor as _T
 
 from typing import List
 
-def gaussian_on_a_circle(num_bins: int, mean_bins: T, std_angles: T, scales: T):
+def gaussian_on_a_circle(num_bins: int, mean_bins: _T, std_angles: _T, scales: _T):
 
     assert mean_bins.shape == std_angles.shape == scales.shape
     assert len(mean_bins.shape) == 1
@@ -23,7 +23,7 @@ def gaussian_on_a_circle(num_bins: int, mean_bins: T, std_angles: T, scales: T):
     return gaussians
 
 
-def grid_points(counts: List[int], lowers: List[int], uppers: List[int]) -> T:
+def grid_points(counts: List[int], lowers: List[int], uppers: List[int]) -> _T:
 
     linspaces = [
         torch.linspace(lower, upper, count).tolist() for lower, upper, count in

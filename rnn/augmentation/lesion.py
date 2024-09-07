@@ -1,9 +1,9 @@
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 from torch.nn import Parameter as P
 
 
-def lesion_from_mask(parameter: P, mask: T, lesion_value: float = 0):
+def lesion_from_mask(parameter: P, mask: _T, lesion_value: float = 0):
     assert parameter.shape == mask.shape
     assert len(mask.shape) == 2
     parameter.data[mask] = lesion_value

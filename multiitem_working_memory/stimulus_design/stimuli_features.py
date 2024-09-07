@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import random
 import numpy as np
-from math import pi, floor
-from torch import Tensor as T
+from math import pi
+from purias_utils.multiitem_working_memory.util.circle_utils import rot_to_rgb
+from torch import Tensor as _T
 from typing import Any, Tuple
 
 
@@ -27,9 +28,10 @@ class FeatureBase:
     value: Any
     name: str
     def __init__(self, value) -> None: ...
-    def alter_image(self, image: T) -> T: ...
+    def alter_image(self, image: _T) -> _T: ...
     def change(self, *args, **kwargs) -> FeatureBase: ...
     def set(self, *args, **kwargs) -> FeatureBase: ...
+
 
 class Location(FeatureBase):
     value: Tuple[float, float]
@@ -44,48 +46,26 @@ class Location(FeatureBase):
     def set(self, x, y):
         return self.__class__(value = (x,y))
 
-class CiruclarFeatureBase(FeatureBase):
+
+class CircularFeatureBase(FeatureBase):
     value: float
     def __init__(self, value: float) -> None:
-        assert (np.isnan(value)) or 0<=value<=2*pi   # Using nan to denote cue here!
+        assert (np.isnan(value)) or 0<=value<=2*pi, value   # Using nan to denote cue here!
         self.value = value
     def change(self, radians):
         new_value = (self.value + radians) % (2 * pi)
         return self.__class__(value = new_value)
+    def set(self, radians):
+        return self.__class__(value = radians)
 
-class Orientation(CiruclarFeatureBase):
+
+class Orientation(CircularFeatureBase):
     name = 'orientation'
     def alter_image(self, image):
         raise NotImplementedError
 
 
-def rot_to_rgb(rot, s=1, v=1, scale_255 = False):
-        h = rot / pi * 180
-        s = float(s)
-        v = float(v)
-        h60 = h / 60.0
-        try:
-            h60f = floor(h60)
-        except:
-            assert np.isnan(h60)
-            return (0,0,0)  # show up as black!
-        hi = int(h60f) % 6
-        f = h60 - h60f
-        p = v * (1 - s)
-        q = v * (1 - f * s)
-        t = v * (1 - (1 - f) * s)
-        r, g, b = 0, 0, 0
-        if hi == 0: r, g, b = v, t, p
-        elif hi == 1: r, g, b = q, v, p
-        elif hi == 2: r, g, b = p, v, t
-        elif hi == 3: r, g, b = p, q, v
-        elif hi == 4: r, g, b = t, p, v
-        elif hi == 5: r, g, b = v, p, q
-        if scale_255:
-            r, g, b = int(r * 255), int(g * 255), int(b * 255)
-        return tuple(float(x) for x in (r, g, b))
-
-class Colour(CiruclarFeatureBase):
+class Colour(CircularFeatureBase):
     name = 'colour'
     def to_rgb(self, s=1, v=1, scale_255 = False):
         return rot_to_rgb(rot = self.value, s=s, v=v, scale_255 = scale_255)

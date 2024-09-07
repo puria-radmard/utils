@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from torch import Tensor as T
+from torch import Tensor as _T
 
 from torch import sigmoid
 
@@ -24,7 +24,7 @@ class LinearBernoulliPriorModelLayer(ExponentialFamilyPriorBase):
     def generate_natural_parameter_from_raw_parameters(self, raw_params, batch_size):
         return raw_params.repeat(batch_size, 1)
     
-    def generate_sufficient_statistic(self, z: T):
+    def generate_sufficient_statistic(self, z: _T):
         "No difference!"
         return z
 
@@ -44,7 +44,7 @@ class LinearBernoulliPriorModelLayer(ExponentialFamilyPriorBase):
         "Raw parameters are natural parameters!"
         return self.natural_prior_param
 
-    def replace_raw_parameters(self, new_parameters: T):
+    def replace_raw_parameters(self, new_parameters: _T):
         "Only get one vector in, so not hard to redistribute!"
         self.natural_prior_param.data = new_parameters.data
 

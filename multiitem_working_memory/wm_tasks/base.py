@@ -2,11 +2,13 @@
 Some simple WM tasks that produce stimulus_board.py objects in batches too
 """
 
-from math import pi
-import random, torch
+from math import cos, pi, sin
+import random
+from purias_utils.util.api import yield_as_obj
 from typing import List, Dict
-from purias_utils.multiitem_working_memory.stimulus_board import Stimulus, StimulusBoardBase, ColouredSquaresBoard
-from purias_utils.multiitem_working_memory.stimuli import *
+from purias_utils.multiitem_working_memory.stimulus_design.stimulus_board import Stimulus, StimulusBoardBase, ColouredSquaresBoard
+from purias_utils.multiitem_working_memory.stimulus_design.stimuli_features import *
+
 
 class MultiItemWMTaskBase:
 
@@ -50,12 +52,13 @@ class MultiItemWMTaskBase:
         for each board
         """
 
-    def generate_target_masks(self, boards: List[StimulusBoardBase], epoch_name: str):
-        """
-        Will use saved states (see augment_boards) to generate supervision target weightings
-        for each board
-        """
+    # def generate_target_masks(self, boards: List[StimulusBoardBase], epoch_name: str):
+    #     """
+    #     Will use saved states (see augment_boards) to generate supervision target weightings
+    #     for each board
+    #     """
 
+    @yield_as_obj
     def generate_epoch(self, *args, **kwargs):
         """
         Bounding method that outputs the model inputs and the supervision targets
@@ -64,17 +67,14 @@ class MultiItemWMTaskBase:
         for epoch_name in self.epoch_names:
             yield dict(
                 duration = self.generate_epoch_duration(epoch_name),                 # Single number, shared amongst boards
-                fixations = self.generate_fixation(boards, epoch_name),  # Fixation shared amonst all boards, shoudl depend only on which epoch we're in
+                fixation = self.generate_fixation(boards, epoch_name),  # Fixation shared amonst all boards, shoudl depend only on which epoch we're in
                 aug_boards = self.augment_boards(boards, epoch_name),                # Board, augmented for this epoch
                 sensory_masks = self.generate_sensory_mask(boards, epoch_name),      # Mask, specified for each stimulus in each board
                 targets = self.generate_targets(boards, epoch_name),                 # Supervision targets
-                target_masks = self.generate_target_masks(boards, epoch_name),                 # Supervision targets
+                # target_masks = self.generate_target_masks(boards, epoch_name),                 # Supervision targets
                 original_boards = boards,
                 epoch_name = epoch_name
             )
-
-
-
 
 
 class SimpleMultiItemWMChangeDetectionTask(MultiItemWMTaskBase):
@@ -86,8 +86,8 @@ class SimpleMultiItemWMChangeDetectionTask(MultiItemWMTaskBase):
         :prestim_dur_upper (float, +)
         :stim_dur_lower (float, +)      = seconds during first stimuli presentation
         :stim_dur_upper (float, +)
-        :wm1_dur_lower (float, +)       = seconds spent in delay between boards
-        :wm1_dur_upper (float, +)
+        :wm_dur_lower (float, +)       = seconds spent in delay between boards
+        :wm_dur_upper (float, +)
         :stim2_dur_lower (float, +)     = seconds during second stimuli presentation
         :stim2_dur_upper (float, +)
         :wm2_dur_lower (float, +)       = seconds spent in delay after second boards
@@ -111,8 +111,8 @@ class SimpleMultiItemWMChangeDetectionTask(MultiItemWMTaskBase):
         prestim_dur_upper = 0.2,
         stim_dur_lower = 0.5,
         stim_dur_upper = 0.5,
-        wm1_dur_lower = 0.5,
-        wm1_dur_upper = 0.5,
+        wm_dur_lower = 0.5,
+        wm_dur_upper = 0.5,
         stim2_dur_lower = 0.5,
         stim2_dur_upper = 0.5,
         wm2_dur_lower = 0.5,
@@ -122,9 +122,10 @@ class SimpleMultiItemWMChangeDetectionTask(MultiItemWMTaskBase):
         p_change = 0.5,
     )
 
-    epoch_names = ['prestim', 'stim', 'wm1', 'stim2', 'wm2', 'resp']
+    epoch_names = ['prestim', 'stim', 'wm', 'stim2', 'wm2', 'resp']
 
     def __init__(self, epoch_kwargs: dict, board_kwargs: dict, batch_size: int) -> None:
+        raise Exception('Need to renovate many things, namely the set sizes and sensory masks')
         self.epoch_kwargs.update(epoch_kwargs)
         self.board_kwargs.update(board_kwargs)
         self.batch_size = batch_size
@@ -132,10 +133,11 @@ class SimpleMultiItemWMChangeDetectionTask(MultiItemWMTaskBase):
         self._was_changed = None
         
     def generate_boards(self, *args, **kwargs):
-        return [ColouredSquaresBoard(**self.board_kwargs) for _ in range(self.batch_size)]
+        set_size = random.randint(self.board_kwargs['set_lower'], self.board_kwargs['set_upper'])
+        return [ColouredSquaresBoard(set_size = set_size, **self.board_kwargs) for _ in range(self.batch_size)]
 
     def augment_boards(self, boards, epoch_name):
-        if epoch_name in ['prestim', 'stim', 'wm1', 'wm2', 'resp']:
+        if epoch_name in ['prestim', 'stim', 'wm', 'wm2', 'resp']:
             return boards   # no stimulus epochs shown will be done with the mask instead
         elif epoch_name == 'stim2':
             altered_boards = []
@@ -156,10 +158,11 @@ class SimpleMultiItemWMChangeDetectionTask(MultiItemWMTaskBase):
             raise ValueError(epoch_name)
 
     def generate_sensory_mask(self, boards, epoch_name):
-        if epoch_name in ['stim', 'stim2']:
-            return torch.tensor([[[1.] for _ in board.stimuli] for board in boards])
-        else:
-            return torch.tensor([[[0.] for _ in board.stimuli] for board in boards])
+        return 1.0 if epoch_name in ['stim', 'stim2'] else 0.0
+        # if epoch_name in ['stim', 'stim2']:
+        #     return torch.tensor([[[1.] for _ in board.stimuli] for board in boards])
+        # else:
+        #     return torch.tensor([[[0.] for _ in board.stimuli] for board in boards])
 
     def generate_fixation(self, boards, epoch_name):
         return 0. if epoch_name == 'resp' else 1.
@@ -175,15 +178,14 @@ class SimpleMultiItemWMChangeDetectionTask(MultiItemWMTaskBase):
             targets = [0. for _ in boards]
         return targets
 
-    def generate_target_masks(self, boards, epoch_name):
-        "maximal weighting to the response epoch"
-        # TODO: MAKE PARAMETERISABLE
-        if epoch_name == 'resp':
-            targets = [10. for _ in boards]
-        else:
-            targets = [1. for _ in boards]
-        return targets
-
+    # def generate_target_masks(self, boards, epoch_name):
+    #     "maximal weighting to the response epoch"
+    #     raise Exception('make scalar')
+    #     if epoch_name == 'resp':
+    #         targets = [10. for _ in boards]
+    #     else:
+    #         targets = [1. for _ in boards]
+    #     return targets
 
 
 class SimpleMultiItemWMDelayedEstimationTask(MultiItemWMTaskBase):
@@ -210,6 +212,7 @@ class SimpleMultiItemWMDelayedEstimationTask(MultiItemWMTaskBase):
         board_y_size = 32, 
         stim_size = 3, 
         loc_border = 2.5,
+        col_border = 0.0
     )
 
     epoch_kwargs = dict(
@@ -224,25 +227,26 @@ class SimpleMultiItemWMDelayedEstimationTask(MultiItemWMTaskBase):
         cue_dur_upper = 0.2,
         resp_dur_lower = 0.4,
         resp_dur_upper = 0.4,
-        p_change = 0.5,
     )
 
     epoch_names = ['prestim', 'stim', 'wm', 'cue', 'resp']
 
     def __init__(self, epoch_kwargs: dict, board_kwargs: dict, batch_size: int, cue_during_response: bool = True) -> None:
+        raise Exception('Need to renovate many things!')
         self.epoch_kwargs.update(epoch_kwargs)
         self.board_kwargs.update(board_kwargs)
         self.batch_size = batch_size
         self._changed_idx = []
-        self.cue_during_response = cue_during_response
+        self.num_classesue_during_response = cue_during_response
         
     def generate_boards(self, *args, **kwargs):
-        return [ColouredSquaresBoard(**self.board_kwargs) for _ in range(self.batch_size)]
+        set_size = random.randint(self.board_kwargs['set_lower'], self.board_kwargs['set_upper'])
+        return [ColouredSquaresBoard(set_size = set_size, **self.board_kwargs) for _ in range(self.batch_size)]
 
     def augment_boards(self, boards, epoch_name):
         if epoch_name in ['prestim', 'stim', 'wm']:
             return boards   # no stimulus epochs shown will be done with the mask instead
-        elif epoch_name in ['cue', 'resp']:
+        elif epoch_name in ['cue', 'resp']:  # deal with resp period in with generate_sensory_mask instead!
             altered_boards = []
             self._selected_idx = []
             for board in boards:
@@ -256,35 +260,38 @@ class SimpleMultiItemWMDelayedEstimationTask(MultiItemWMTaskBase):
 
     def generate_sensory_mask(self, boards, epoch_name):
         "because of varying set size, also need to cover everything else"
-        max_set_size = max([board.set_size for board in boards])
-        if (epoch_name in ['stim', 'cue']) or (epoch_name == 'resp' and self.cue_during_response):
-            return torch.tensor([[[1.] for _ in board.stimuli] + [[0.] for _ in range(max_set_size - board.set_size)] for board in boards])
+        if self.num_classesue_during_response:
+            return 1.0 if epoch_name in ['stim', 'cue'] else 0.0
         else:
-            return torch.tensor([[[0.] for _ in range(max_set_size)] for board in boards])
+            return 1.0 if epoch_name in ['stim', 'cue', 'resp'] else 0.0
+        # max_set_size = max([board.set_size for board in boards])
+        # if (epoch_name in ['stim', 'cue']) or (epoch_name == 'resp' and self.num_classesue_during_response):
+        #     return torch.tensor([[[1.] for _ in board.stimuli] + [[0.] for _ in range(max_set_size - board.set_size)] for board in boards])
+        # else:
+        #     return torch.tensor([[[0.] for _ in range(max_set_size)] for board in boards])
 
     def generate_fixation(self, boards, epoch_name):
         return 0. if epoch_name == 'resp' else 1.
     
     def generate_targets(self, boards, epoch_name):
-        "fixation, x coord, y coord. before response epoch, only fixation matters, so just place 0s"
+        "orientation as a location on a 2D ring!"
         if epoch_name == 'resp':
             targets = []
             for j, board in enumerate(boards):
-                new_target = [0., board.stimuli[self._selected_idx[j]].features['colour'].value]
+                angle = board.stimuli[self._selected_idx[j]].features['colour'].value
+                new_target = [cos(angle), sin(angle)]
                 targets.append(new_target)
         else:
-            targets = [[1., 0.] for _ in boards]
+            targets = [[0., 0.] for _ in boards]
         return targets
 
-    def generate_target_masks(self, boards, epoch_name):
-        "before response epoch, just weight the fixation. during response epoch"
-        if epoch_name == 'resp':
-            target_masks = [[1. / self.epoch_kwargs['fixation_mag_div'], 1.] for _ in boards]
-        elif epoch_name == 'prestim':
-            target_masks = [[0., 0.] for _ in boards]
-        else:
-            target_masks = [[1. / self.epoch_kwargs['fixation_mag_div'], 0.] for _ in boards]
-        return target_masks
+    # def generate_target_masks(self, boards, epoch_name):
+    #     "given new system of targets (as locations), target is always important except for at prestim"
+    #     if epoch_name == 'prestim':
+    #         target_masks = [[0.] for _ in boards]
+    #     else:
+    #         target_masks = [[1.] for _ in boards]
+    #     return target_masks
 
 
 class SimpleSingleItemWMDelayedLocationRecall(MultiItemWMTaskBase):
@@ -303,13 +310,13 @@ class SimpleSingleItemWMDelayedLocationRecall(MultiItemWMTaskBase):
         wm_dur_upper = 1.1,
         resp_dur_lower = 0.4,
         resp_dur_upper = 0.4,
-        p_change = 0.5,
     )
 
     epoch_names = ['prestim', 'stim', 'wm', 'resp']
 
 
     def __init__(self, epoch_kwargs: dict, batch_size: int) -> None:
+        raise Exception('Need to renovate many things!')
         self.epoch_kwargs.update(epoch_kwargs)
         self.batch_size = batch_size
         
@@ -330,12 +337,14 @@ class SimpleSingleItemWMDelayedLocationRecall(MultiItemWMTaskBase):
         "fixation, x coord, y coord. before response epoch, only fixation matters, so just place 0s"
         return [[0., board.features['colour'].value] if epoch_name == 'resp' else [1., 0.] for board in boards]
 
-    def generate_target_masks(self, boards, epoch_name):
-        "before response epoch, just weight the fixation. during response epoch"
-        if epoch_name == 'resp':
-            target_masks = [[1. / self.epoch_kwargs['fixation_mag_div'], 1.] for _ in boards]
-        elif epoch_name == 'prestim':
-            target_masks = [[0., 0.] for _ in boards]
-        else:
-            target_masks = [[1. / self.epoch_kwargs['fixation_mag_div'], 0.] for _ in boards]
-        return target_masks
+    # def generate_target_masks(self, boards, epoch_name):
+    # SUPER OLD NOW!
+    #     "before response epoch, just weight the fixation. during response epoch"
+    #     raise Exception('remove fixation loss')
+    #     if epoch_name == 'resp':
+    #         target_masks = [[1. / self.epoch_kwargs['fixation_mag_div'], 1.] for _ in boards] 
+    #     elif epoch_name == 'prestim':
+    #         target_masks = [[0., 0.] for _ in boards]
+    #     else:
+    #         target_masks = [[1. / self.epoch_kwargs['fixation_mag_div'], 0.] for _ in boards]
+    #     return target_masks

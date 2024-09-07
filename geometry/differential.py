@@ -1,7 +1,7 @@
 from typing import Callable, Union
 
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 from torch.autograd import grad
 from torch.autograd.functional import jacobian
 
@@ -45,7 +45,7 @@ class FunctionDifferentiator:
             0: []
         }
 
-    def check_shape(self, tensor: T):
+    def check_shape(self, tensor: _T):
         assert tuple(tensor.shape[:2]) == (self.batch_size, self.d_out)
         for dim in tensor.shape[2:]:
             assert dim == self.d_in
@@ -57,7 +57,7 @@ class FunctionDifferentiator:
             result = torch.cat(self._cached_results[m], 0)
             self.check_shape(result)
 
-    def _nth_order_diff_function_inner(self, batch: T, batch_number: int, n: int):
+    def _nth_order_diff_function_inner(self, batch: _T, batch_number: int, n: int):
         "Following example here: https://discuss.pytorch.org/t/jacobian-functional-api-batch-respecting-jacobian/84571/3"
         """
             Should be of shape [batch, d_out, (d_in n times)] for example:
@@ -103,7 +103,7 @@ class FunctionDifferentiator:
 
 
 
-    def batch_differentiate(self, df_prevn_x: T):
+    def batch_differentiate(self, df_prevn_x: _T):
         """
             Input is the evaluation of d^{n-1}f/dx^{n-1}
             

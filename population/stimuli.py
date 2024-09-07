@@ -1,5 +1,5 @@
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 
 class StimulusBasisFunctionSetBase:
     """
@@ -10,7 +10,7 @@ class StimulusBasisFunctionSetBase:
     def __init__(self, dimension: int) -> None:
         self.dimension = dimension
 
-    def multiplicative_stimulus(self, weights: T):
+    def multiplicative_stimulus(self, weights: _T):
         """
         Combine many bases to generate this multivalued function
         """
@@ -32,14 +32,14 @@ class VectorisedStimulusBasisFunctionSet(StimulusBasisFunctionSetBase):
         N is the number of basis functions, i.e. 2 in the original paper
     """
 
-    def __init__(self, basis_vectors: T) -> None:
+    def __init__(self, basis_vectors: _T) -> None:
         
         self.basis_vectors = basis_vectors
         self.B, self.N = basis_vectors.shape
 
         super(VectorisedStimulusBasisFunctionSet, self).__init__(dimension = 1)
 
-    def multiplicative_stimulus(self, weights: T):
+    def multiplicative_stimulus(self, weights: _T):
         "weights of shape [batch, B]. output of shape [batch, B]"
         assert len(weights.shape) == 2
         assert weights.shape[-1] == self.N

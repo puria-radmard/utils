@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
-from torch import Tensor as T
+from torch import Tensor as _T
 
 from maths import communicability_reg
 
@@ -18,7 +18,7 @@ class RegBase:
         super(RegBase, self).__init__()
 
     @property
-    def mask(self) -> T: 
+    def mask(self) -> _T: 
         return self.mask_func()
 
     # Basic arithmetic
@@ -41,7 +41,7 @@ class RegBase:
 
 class L1Reg(RegBase):
 
-    def __init__(self, param: T) -> None:
+    def __init__(self, param: _T) -> None:
         self.param = param
 
     @property
@@ -52,7 +52,7 @@ class L1Reg(RegBase):
 
 class DistanceReg(RegBase):
 
-    def __init__(self, locations: T):
+    def __init__(self, locations: _T):
         self.locations = locations.float()
         _locs = self.locations[None, :, :]
         self.distances = torch.cdist(_locs, _locs)[0]
@@ -65,7 +65,7 @@ class DistanceReg(RegBase):
 
 class GridDistanceReg(DistanceReg):
 
-    def __init__(self, counts: T, lengths: T):
+    def __init__(self, counts: _T, lengths: _T):
         dim_locations = []
         for count, length in zip(counts, lengths):
             dim_locations.append(torch.linspace(0., length, count))
@@ -78,7 +78,7 @@ class CommunicabilityReg(RegBase):
     This uses Croft and Higham, 2009, as in seRNN manuscript
     """
 
-    def __init__(self, param: T) -> None:
+    def __init__(self, param: _T) -> None:
         self.param = param
         self.device = param.device
 

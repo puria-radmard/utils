@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from torch import Tensor as T
+from torch import Tensor as _T
 
 from typing import List, Callable
 
@@ -65,7 +65,7 @@ class MixtureOfScalarGaussiansModelLayer(ExponentialFamilyModelLayerBase):
         else:
             self.rf = lambda bz, m: (2 * bz - 1) * m
 
-    def generate_natural_parameter_from_raw_parameters(self, raw_params: T, z_prev: T):
+    def generate_natural_parameter_from_raw_parameters(self, raw_params: _T, z_prev: _T):
         "Scalar so output shape is [batch, 2]"
         mu = raw_params[0]
         sigma = raw_params[1]
@@ -73,10 +73,10 @@ class MixtureOfScalarGaussiansModelLayer(ExponentialFamilyModelLayerBase):
         minus_half = torch.ones_like(mean) * -0.5
         return torch.cat([mean, minus_half], dim = 1) / (sigma ** 2)
 
-    def generate_sufficient_statistic(self, z: T):
+    def generate_sufficient_statistic(self, z: _T):
         return torch.cat([z, z**2], axis = -1)
     
-    def sample_conditional_from_natural_parameter(self, natural_parameter: T):
+    def sample_conditional_from_natural_parameter(self, natural_parameter: _T):
         min_half_over_sigma_squared = natural_parameter[:,1].unsqueeze(1)
         sigma = (-0.5 / min_half_over_sigma_squared) ** 0.5
         mean = natural_parameter[:,0].unsqueeze(1) * (sigma ** 2)
@@ -102,14 +102,14 @@ class MixtureOfScalarGaussiansModelLayer(ExponentialFamilyModelLayerBase):
         "Return as a 2-tensor"
         return torch.stack([self.mu, self.sigma])
 
-    def replace_raw_parameters(self, new_parameters: T):
+    def replace_raw_parameters(self, new_parameters: _T):
         "Follow the above!"
         assert tuple(new_parameters.shape) == (2,)
         self.mu.data = new_parameters.data[0]
         self.sigma.data = new_parameters.data[1]
 
 
-def batch_diag(bm: T):
+def batch_diag(bm: _T):
     assert (len(bm.shape) == 3) and bm.shape[1] == bm.shape[2]
     return torch.stack([torch.diag(m) for m in bm], dim=0)
 
@@ -127,7 +127,7 @@ class DiagonalConditionalGaussianModelLayer(ExponentialFamilyModelLayerBase):
         self.register_parameter(name='log_diagonal_sigma', param=torch.nn.Parameter(torch.randn(output_dim)))
         self.register_parameter(name='mean_multiplier', param=torch.nn.Parameter(torch.randn(input_dim, output_dim)))
 
-    def generate_natural_parameter_from_raw_parameters(self, raw_params: T, z_prev: T, flatten = True):
+    def generate_natural_parameter_from_raw_parameters(self, raw_params: _T, z_prev: _T, flatten = True):
         N_out, N_in = self.output_dim, self.input_dim
         mean_multiplier = raw_params[:N_out * N_in].reshape(N_in, N_out)
         diagonal_sigma = raw_params[-N_out:]
@@ -138,12 +138,12 @@ class DiagonalConditionalGaussianModelLayer(ExponentialFamilyModelLayerBase):
         result = torch.cat([first_natural_parameter, second_natural_parameter], dim = 1)
         return result.reshape(z_prev.shape[0], -1) if flatten else result
     
-    def generate_sufficient_statistic(self, z: T, flatten = True):
+    def generate_sufficient_statistic(self, z: _T, flatten = True):
         z_squared = z.unsqueeze(1) * z.unsqueeze(2)
         result = torch.cat([z.unsqueeze(1), z_squared], dim = 1)
         return result.reshape(z.shape[0], -1) if flatten else result
 
-    def sample_conditional_from_natural_parameter(self, natural_parameter: Union[T, None]):
+    def sample_conditional_from_natural_parameter(self, natural_parameter: Union[_T, None]):
         "This will only work for diagonal inverse cov provided!! No asserts in place here!"
         if len(natural_parameter.shape) == 3:   # generated with flatten = False
             assert natural_parameter.shape[1:] == (self.output_dim + 1, self.output_dim)
@@ -191,7 +191,7 @@ class DiagonalConditionalGaussianModelLayer(ExponentialFamilyModelLayerBase):
             self.log_diagonal_sigma
         ], dim = 0)
     
-    def replace_raw_parameters(self, new_parameters: T):
+    def replace_raw_parameters(self, new_parameters: _T):
         N_out, N_in = self.output_dim, self.input_dim
         assert tuple(new_parameters.shape) == (N_out * N_in + N_out,)
         self.mean_multiplier.data = new_parameters[:N_out * N_in].data.reshape(N_in, N_out)

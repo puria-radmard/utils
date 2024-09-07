@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from torch import Tensor as T
+from torch import Tensor as _T
 from torch.nn import ParameterList, ModuleList
 from torch.nn.functional import sigmoid, mse_loss
 
@@ -51,12 +51,12 @@ class DDCHMLayer(nn.Module):
             in_features=encoding_dim, out_features=beta_output_dim, bias=False
         )
 
-    def T_enc(self, z: T):
+    def T_enc(self, z: _T):
         "Encoding functions remain random"
         with torch.no_grad():
             return self.latent_encoder(z)
 
-    def approximate_with_alphas(self, encoding: T = None, z: T = None):
+    def approximate_with_alphas(self, encoding: _T = None, z: _T = None):
         "Equation 30/33. Either directly from encoding (T), or with z"
         if encoding is None:
             encoding = self.T_enc(z)
@@ -64,7 +64,7 @@ class DDCHMLayer(nn.Module):
             assert z is None, "Cannot provide both encoding (T(z)) and latent (z)!"
         return self.alphas(encoding)
 
-    def approximate_with_betas(self, encoding: T = None, z: T = None):
+    def approximate_with_betas(self, encoding: _T = None, z: _T = None):
         "Equation 32. Either directly from encoding (T), or with z"
         if encoding is None:
             encoding = self.T_enc(z)
@@ -95,7 +95,7 @@ class DDCHMDataLayer(DDCHMLayer):
             in_features=higher_encoding_dim, out_features=alpha_output_dim, bias=False
         )
 
-    def approximate_with_alphas(self, encoding: T = None, z: T = None):
+    def approximate_with_alphas(self, encoding: _T = None, z: _T = None):
         """
             Special case - see equation 36.
             TODO: make an alpha0 for every layer? Not used but grammatically correct!
@@ -135,11 +135,11 @@ class DDCHelmholtzMachine(nn.Module):
         "Starting with z_L, generate with the current model (theta), with the last item being dreamt data"
         return self.generative_model.full_generate(batch_size=batch_size)
 
-    def get_all_encodings(self, latents: List[T]):
+    def get_all_encodings(self, latents: List[_T]):
         "Get T for each layer. Will have no grad. Order is backwards (L -> 1)"
         return [layer.T_enc(latents[i]) for i, layer in enumerate(self.layers[:-1])]
 
-    def full_recognition(self, data: T):
+    def full_recognition(self, data: _T):
         """
             Loop over layers l and recognise from l-1. Start with data project, which is not passed on
             As noted in docstring, this requires order reversal. 
@@ -217,7 +217,7 @@ class DDCHelmholtzMachine(nn.Module):
         }
 
     
-    def wake_phase_gradients(self, data: T) -> List[T]:
+    def wake_phase_gradients(self, data: _T) -> List[_T]:
         """
         Having trained on gradient function approximation for the sleep phase, it's time
             to apply to approximated gradients to the network parameters, as in equation 10.

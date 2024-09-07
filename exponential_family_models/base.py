@@ -1,6 +1,6 @@
 from torch.autograd.functional import jacobian
 from torch import nn
-from torch import Tensor as T
+from torch import Tensor as _T
 
 from typing import Union
 from abc import ABC, abstractmethod
@@ -15,7 +15,7 @@ class ExponentialFamilyModelLayerBase(nn.Module, ABC):
         super().__init__()
         self.output_dim = output_dim
 
-    def sample_conditional_from_previous_latent(self, z_prev: Union[T, None]):
+    def sample_conditional_from_previous_latent(self, z_prev: Union[_T, None]):
         """
             This would sample from e^{g(z_prev, params) . S(z_own)} / Z(g),
             but we just use torch.distributions to make this easier to implement
@@ -24,23 +24,23 @@ class ExponentialFamilyModelLayerBase(nn.Module, ABC):
         return self.sample_conditional_from_natural_parameter(natural_parameter)
 
     @abstractmethod
-    def sample_conditional_from_natural_parameter(self, natural_parameter: Union[T, None]):
+    def sample_conditional_from_natural_parameter(self, natural_parameter: Union[_T, None]):
         "The same as sample_conditional_from_previous_latent when combined with generate_natural_parameter"
         raise NotImplementedError
     
     @abstractmethod
-    def generate_natural_parameter_from_raw_parameters(self, raw_params: T, z_prev: T):
+    def generate_natural_parameter_from_raw_parameters(self, raw_params: _T, z_prev: _T):
         """
         Needed so we can use torch autograd to implement nabla_natural_parameter
         """
         raise NotImplementedError
 
-    def generate_natural_parameter(self, z_prev: T):
+    def generate_natural_parameter(self, z_prev: _T):
         params = self.raw_parameter_values()
         return self.generate_natural_parameter_from_raw_parameters(params, z_prev)
 
     @abstractmethod
-    def generate_sufficient_statistic(self, z: T):
+    def generate_sufficient_statistic(self, z: _T):
         "S in the paper"
         raise NotImplementedError
     
@@ -55,7 +55,7 @@ class ExponentialFamilyModelLayerBase(nn.Module, ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def replace_raw_parameters(self, new_parameters: T):
+    def replace_raw_parameters(self, new_parameters: _T):
         """
             Will receive a single replacement term tensor, 
                 and should reshape/distribute them to parameters accordingly
@@ -74,7 +74,7 @@ class ExponentialFamilyModelLayerBase(nn.Module, ABC):
         """
         raise NotImplementedError
 
-    def nabla_natural_parameter(self, z_prev: Union[T, None]):
+    def nabla_natural_parameter(self, z_prev: Union[_T, None]):
         """
             Derivative wrt parameter of generate_natural_parameter
             Still seperated by batch remember!
@@ -95,7 +95,7 @@ class ExponentialFamilyPriorBase(ExponentialFamilyModelLayerBase):
         return self.sample_conditional_from_natural_parameter(natural_parameter)
 
     @abstractmethod
-    def generate_natural_parameter_from_raw_parameters(self, raw_params: T, batch_size: int):
+    def generate_natural_parameter_from_raw_parameters(self, raw_params: _T, batch_size: int):
         """
         Needed so we can use torch autograd to implement nabla_natural_parameter
         """

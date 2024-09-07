@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from torch import Tensor as T
+from torch import Tensor as _T
 from torch.optim.optimizer import Optimizer
 
 import math
@@ -21,9 +21,9 @@ class GaussianProcessFit(nn.Module):
         self.prior = prior
         self.posterior_fitted = False
         
-        self.noisy_cov_inv: T = None
-        self.fitting_features: T = None
-        self.fitting_outputs: T = None
+        self.noisy_cov_inv: _T = None
+        self.fitting_features: _T = None
+        self.fitting_outputs: _T = None
         
         self.register_parameter(
             name='log_noise_variance', 
@@ -36,7 +36,7 @@ class GaussianProcessFit(nn.Module):
         self.log_noise_variance.data = torch.tensor(self.start_sigma_squared).log()
         self.prior.reset_state_dict()
 
-    def nll(self, data_features: T, data_outputs: T) -> T:
+    def nll(self, data_features: _T, data_outputs: _T) -> _T:
         K_and_noisy_inv = self.fit_posterior(data_features, data_outputs, keep = False)
         K = K_and_noisy_inv["K"]
         noisy_cov_inv = K_and_noisy_inv["noisy_cov_inv"]
@@ -49,7 +49,7 @@ class GaussianProcessFit(nn.Module):
             (n * math.log(2 * torch.pi))
         )
 
-    def fit_prior(self, data_features: T, data_outputs: T, optim: Optimizer = None, num_steps: int = 10000, num_repeats: int = 10, show_losses = False, reset=True):
+    def fit_prior(self, data_features: _T, data_outputs: _T, optim: Optimizer = None, num_steps: int = 10000, num_repeats: int = 10, show_losses = False, reset=True):
         """
             Fit the parameters of the prior kernel to some data
         """
@@ -85,7 +85,7 @@ class GaussianProcessFit(nn.Module):
         if not self.posterior_fitted:
             raise Exception('Posterior not fitted to any data yet!')
 
-    def fit_posterior(self, data_features: T, data_outputs: T, keep=True):
+    def fit_posterior(self, data_features: _T, data_outputs: _T, keep=True):
         """
             Generate the heavy machinery for the posterior, to
                 save us having to recalculate for subsequent test points
@@ -130,7 +130,7 @@ class GaussianProcessFit(nn.Module):
 
         return {'m_post': m_post, 'K_post': K_post}
 
-    def sample_from_posterior(self, m_post: T, K_post: T, make_K_post_psd= False):
+    def sample_from_posterior(self, m_post: _T, K_post: _T, make_K_post_psd= False):
         if make_K_post_psd:
             K_post = self.make_matrix_psd(K_post)
         seed = torch.randn(m_post.shape[0], device=m_post.device)

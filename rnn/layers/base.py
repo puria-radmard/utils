@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
-from torch import Tensor as T
+from torch import Tensor as _T
 from typing import Type, Union
 
 import copy
@@ -19,15 +19,15 @@ class WeightLayer(nn.Module):
     self.base_matrix gives the masked
     """
 
-    def __init__(self, base_matrix: Union[T, Type[WeightLayer]]) -> None:
+    def __init__(self, base_matrix: Union[_T, Type[WeightLayer]]) -> None:
         super().__init__()
 
-        if isinstance(base_matrix, T):
+        if isinstance(base_matrix, _T):
             base_matrix = WeightLayerBase(base_matrix)
         self._base_matrix: WeightLayer = base_matrix
 
     @property
-    def masked_weight(self) -> T:
+    def masked_weight(self) -> _T:
         "Specific to subclass"
         raise NotImplementedError
 
@@ -67,14 +67,14 @@ class WeightLayer(nn.Module):
         new.raw_matrix = new_W
         return new
 
-    def forward(self, x: T):
-        return self.masked_weight @ x
+    def forward(self, x: _T):
+        return x @ self.masked_weight.T
 
 
 
 class WeightLayerBase(WeightLayer):
 
-    def __init__(self, base_matrix: T):
+    def __init__(self, base_matrix: _T):
         super(WeightLayer, self).__init__()
         self.register_parameter(name='_base_matrix', param=torch.nn.Parameter(base_matrix))
 
@@ -101,6 +101,7 @@ class WeightLayerBase(WeightLayer):
 
 
 
+
 class AbsWeightLayer(WeightLayer):
 
     @property
@@ -113,13 +114,21 @@ class ConstantWeightLayer(WeightLayer):
     No parameter assignment
     """
 
-    def __init__(self, base_matrix: T) -> None:
+    def __init__(self, base_matrix: _T) -> None:
         super(WeightLayer, self).__init__()
         self._base_matrix = base_matrix
 
     @property
     def masked_weight(self):
         return self._base_matrix
+
+    def cuda(self: _T, device = None) -> _T:
+        self._base_matrix = self._base_matrix.cuda(device)
+        return super().cuda(device)
+
+    def cpu(self: _T) -> _T:
+        self._base_matrix = self._base_matrix.cpu()
+        return super().cpu()
     
 
 class NoAutapse(WeightLayer):

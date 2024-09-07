@@ -1,9 +1,9 @@
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 from torch.nn import functional as F
 
 
-def time_meaned_trial_covariance(trial_samples: T):
+def time_meaned_trial_covariance(trial_samples: _T):
 
     assert len(trial_samples.shape) == 4, "need timeseries_covariance input to be of shape [batch, time, neurons, trials]"
 

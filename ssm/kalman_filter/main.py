@@ -1,5 +1,5 @@
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 
 from purias_utils.ssm.process.base import *
 from purias_utils.ssm.process.noise import *
@@ -17,8 +17,8 @@ class NonBayesianKalmanFilter:
     """
     def __init__(
         self,
-        initial_estimate: T,
-        initial_state_estimate_covariance: T,
+        initial_estimate: _T,
+        initial_state_estimate_covariance: _T,
         fn_process: ProcessBase,
         gn_process: ProcessBase,
         qn_process: WhiteNoise,
@@ -26,18 +26,18 @@ class NonBayesianKalmanFilter:
         observation_process: ProcessBase
     ) -> None:
         
-        self.state_estimate: T = initial_estimate
-        self.state_estimate_covariance: T = initial_state_estimate_covariance
+        self.state_estimate: _T = initial_estimate
+        self.state_estimate_covariance: _T = initial_state_estimate_covariance
 
-        self.state_prediction: T = None
-        self.state_prediction_covariance: T = None
+        self.state_prediction: _T = None
+        self.state_prediction_covariance: _T = None
 
-        self.output_prediction: T = None
+        self.output_prediction: _T = None
 
-        self.output_innovation: T = None
-        self.innovation_covariance: T = None
+        self.output_innovation: _T = None
+        self.innovation_covariance: _T = None
 
-        self.kalman_gain: T = None
+        self.kalman_gain: _T = None
 
         self.fn_process = fn_process
         self.gn_process = gn_process

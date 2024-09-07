@@ -4,17 +4,17 @@ from purias_utils.population.stimuli import StimulusBasisFunctionSetBase
 import math
 
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 
 class TuningCurveBase:
 
     def __init__(self, stimulus_dimension: int) -> None:
         self.stimulus_dimension = stimulus_dimension
 
-    def _r(self, stimulus: T):
+    def _r(self, stimulus: _T):
         raise NotImplementedError
 
-    def mean_firing_rate(self, stimulus: T):
+    def mean_firing_rate(self, stimulus: _T):
         assert stimulus.shape[1] == self.stimulus_dimension
         assert len(stimulus.shape) == 2
         response = self._r(stimulus)
@@ -27,13 +27,13 @@ class AngularThresholdedTuningCurve(TuningCurveBase):
     Can stack tuning curves here remember!
     """
 
-    def __init__(self, tuning_curve: T, thresholds: T) -> None:
+    def __init__(self, tuning_curve: _T, thresholds: _T) -> None:
         stimulus_dimension = tuning_curve.shape[-1]
         super().__init__(stimulus_dimension=stimulus_dimension)
         self.tuning_curve = tuning_curve
         self.thresholds = thresholds
 
-    def _r(self, stimulus: T):
+    def _r(self, stimulus: _T):
         all_subpopulation_responses = []
         for threshold in self.thresholds:
             all_subpopulation_responses.append(
@@ -54,18 +54,18 @@ class IndependentPoissonPopulationResponse:
         assert all([tc.stimulus_dimension == self.stimulus_dimension for tc in tuning_curves])
         self.tuning_curves = tuning_curves
 
-    def population_mean_firing_rate(self, stimulus: T):
+    def population_mean_firing_rate(self, stimulus: _T):
         """Finer combinations should be done at tuning curve lever"""
         return torch.vstack([tc.mean_firing_rate(stimulus) for tc in self.tuning_curves])
 
-    def population_empirical_rates(self, stimulus: T, duration: float):
+    def population_empirical_rates(self, stimulus: _T, duration: float):
         mean_firing_rates = self.population_mean_firing_rate(stimulus)
         return torch.poisson(mean_firing_rates * duration) / duration
 
-    def empirical_rates_from_encoded_rates(self, rates: T, duration: float):
+    def empirical_rates_from_encoded_rates(self, rates: _T, duration: float):
         return torch.poisson(rates * duration) / duration
 
-    def uncertain_response(self, stimulus_function_base: StimulusBasisFunctionSetBase, probabilities: T):
+    def uncertain_response(self, stimulus_function_base: StimulusBasisFunctionSetBase, probabilities: _T):
         assert probabilities.sum() == 1.0
         return probabilities @ self.population_mean_firing_rate(stimulus_function_base.full_basis().T)
 

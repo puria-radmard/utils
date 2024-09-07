@@ -1,13 +1,13 @@
 import torch
 from torch import linalg
-from torch import Tensor as T
+from torch import Tensor as _T
 from torch.nn import functional as F
 from tqdm import tqdm
 from maths.graph import binarise_weight_matrix
 from itertools import combinations
 
 
-def pairwise_average(W: T):
+def pairwise_average(W: _T):
     """
     Average E-E connectivity
     This follows same convention as tuning_curves_pdist
@@ -20,7 +20,7 @@ def pairwise_average(W: T):
 
 
 
-def input_weights_dot_product(W: T, norm_curves = False):
+def input_weights_dot_product(W: _T, norm_curves = False):
     """
     Similarity in tuning curve
     This follows same convention as pairwise_average
@@ -42,7 +42,7 @@ def get_all_pair_indices(num_cells: int):
     for combo in combinations(symbols, 2):
         yield combo
 
-def get_subweights_from_triplet(W: T, triplet_indices):
+def get_subweights_from_triplet(W: _T, triplet_indices):
     ti = list(triplet_indices)
     return W[ti][:,ti]
 
@@ -120,7 +120,7 @@ def get_feature_type_from_tiplet_subweight(subweights):
         
 
 
-def count_features_in_binary(W: T, tqdm_it = False):
+def count_features_in_binary(W: _T, tqdm_it = False):
     """
     Feature type ordering is based on Song 05 figure 4B
     """

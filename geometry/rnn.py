@@ -1,5 +1,5 @@
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 
 from tqdm import tqdm
 from typing import List, Union
@@ -37,7 +37,7 @@ class EmbeddedTangentFieldTargettedRNN:
         x_pinv += torch.eye(x_pinv.shape[0]) * 1e-6 
         self.x_pinv = (x_pinv @ x.T)
 
-    def ols_fit_w_rec(self, embedded_tangent_vectors: List[T]):
+    def ols_fit_w_rec(self, embedded_tangent_vectors: List[_T]):
         assert len(embedded_tangent_vectors) == len(self.manifold.charts)
         y = torch.cat(embedded_tangent_vectors, 0)
         y = y[self.point_connectivty]
@@ -49,7 +49,7 @@ class EmbeddedTangentFieldTargettedRNN:
             "Y": y
         }
 
-    def generate_trajectory(self, W: T, initial_position: Union[T, Points], dt: float, num_steps: int):
+    def generate_trajectory(self, W: _T, initial_position: Union[_T, Points], dt: float, num_steps: int):
         u_history = [initial_position if isinstance(initial_position, T) else initial_position.coords]
 
         for t in tqdm(range(num_steps - 1)):
@@ -71,7 +71,7 @@ class SecondOrderEmbeddedTangentFieldTargettedRNN(EmbeddedTangentFieldTargettedR
     ) -> None:
         super().__init__(embedding, non_lin, scale)
 
-    def ols_fit_w_rec(self, embedded_tangent_vectors: List[T], embedded_tangent_vector_tangent_vectors: List[T]):
+    def ols_fit_w_rec(self, embedded_tangent_vectors: List[_T], embedded_tangent_vector_tangent_vectors: List[_T]):
 
         first_order_results = super().ols_fit_w_rec(embedded_tangent_vectors)
         second_order_results = super().ols_fit_w_rec(embedded_tangent_vector_tangent_vectors)
@@ -84,7 +84,7 @@ class SecondOrderEmbeddedTangentFieldTargettedRNN(EmbeddedTangentFieldTargettedR
         )
         return first_order_results
 
-    def generate_trajectory(self, W: T, Z: T, initial_position: Union[T, Points], dt: int, num_steps: int):
+    def generate_trajectory(self, W: _T, Z: _T, initial_position: Union[_T, Points], dt: int, num_steps: int):
         u_history = [initial_position if isinstance(initial_position, T) else initial_position.coords]
 
         total_dynamics_matrix = (dt * W) + (0.5 * dt * Z)

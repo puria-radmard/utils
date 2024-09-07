@@ -1,5 +1,5 @@
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 from purias_utils.ssm.process.base import ProcessBase, FlatProcess
 
 from typing import Union

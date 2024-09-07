@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from math import log
 from torch import nn
-from torch import Tensor as T
+from torch import Tensor as _T
 from torch.nn.parameter import Parameter
 from maths.gsm import gabor
 
@@ -12,11 +12,11 @@ SCALE_TO_SIGMA = 5
 SCALE_TO_K = 0.5
 GAMMA = 1
 
-def gsm_forward_pass(filter_set: T, latent_values: T, noise_term: T, contrast) -> T:
+def gsm_forward_pass(filter_set: _T, latent_values: _T, noise_term: _T, contrast) -> _T:
     return contrast * (filter_set @ latent_values) + noise_term
 
 
-def gabor(theta: T, scale: T, _x: T, _y: T, square_size: int, device='cuda') -> T:
+def gabor(theta: _T, scale: _T, _x: _T, _y: _T, square_size: int, device='cuda') -> _T:
     """
     "Forward-pass" of a set of filter parameters (theta_A) to the actual filter set A
     """
@@ -54,7 +54,7 @@ def gabor(theta: T, scale: T, _x: T, _y: T, square_size: int, device='cuda') -> 
     return fields, gauss, sinusoid
 
 
-def ols_fit(filter_set: T, image_set: T) -> T:
+def ols_fit(filter_set: _T, image_set: _T) -> _T:
     # filter set: [full image size, num_filters]
     # image_set: [num_images, full image size]
     # output: [num_images, num_filters]
@@ -62,7 +62,7 @@ def ols_fit(filter_set: T, image_set: T) -> T:
     return (left_inv @ image_set.unsqueeze(-1)).squeeze()
 
 
-def ols_projection(filter_set: T, image_set: T) -> T:
+def ols_projection(filter_set: _T, image_set: _T) -> _T:
     "Appendix A, equation 2"
     # filter set: [full image size, num_filters]
     # image_set: [num_images, full image size]
@@ -71,7 +71,7 @@ def ols_projection(filter_set: T, image_set: T) -> T:
     return torch.stack([(lt * filter_set).sum(1) for lt in latents])
 
 
-def unexplained_variance_loss(x: T, x_ols: T, mean = True) -> T:
+def unexplained_variance_loss(x: _T, x_ols: _T, mean = True) -> _T:
 
     "Appendix A, equation 3. Assume all of size [n_filters, n_pixels]"
     error_squared = torch.square(x - x_ols).sum(-1)
@@ -80,7 +80,7 @@ def unexplained_variance_loss(x: T, x_ols: T, mean = True) -> T:
     return fvu.mean() if mean else fvu
 
 
-def _p_x_given_z_gauss(A: T, C: T, z: T, sigma_x: T) -> T:
+def _p_x_given_z_gauss(A: _T, C: _T, z: _T, sigma_x: _T) -> _T:
     # Avoid repeated calcs that don't depend on X
 
     Nz = z.shape[0]
@@ -106,7 +106,7 @@ def _p_x_given_z_gauss(A: T, C: T, z: T, sigma_x: T) -> T:
     return gauss
 
 
-def log_p_x_given_z(xs: T, A: T = None, C: T = None, z: T = None, sigma_x: T = None, gauss = None) -> T:
+def log_p_x_given_z(xs: _T, A: _T = None, C: _T = None, z: _T = None, sigma_x: _T = None, gauss = None) -> _T:
 
     if gauss is None:
         gauss = _p_x_given_z_gauss(A=A, C=C, z=z, sigma_x=sigma_x)
@@ -119,14 +119,14 @@ def log_p_x_given_z(xs: T, A: T = None, C: T = None, z: T = None, sigma_x: T = N
     return gaussian_loglikelihood
 
 
-def log_p_z(z: T, alpha: T, beta: T) -> T:
+def log_p_z(z: _T, alpha: _T, beta: _T) -> _T:
     gamma_likelihood = torch.distributions.gamma.Gamma(
         concentration=alpha, rate=beta
     ).log_prob(z)
     return gamma_likelihood
 
 
-def p_y_given_x_z(z: T, sigma_x: T, A: T, C: T, x: T):
+def p_y_given_x_z(z: _T, sigma_x: _T, A: _T, C: _T, x: _T):
     Nz = z.shape[0]
 
     # [num_filters, num_filters, Nz]

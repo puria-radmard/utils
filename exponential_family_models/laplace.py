@@ -1,5 +1,5 @@
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 
 from torch.nn.functional import softplus
 
@@ -28,7 +28,7 @@ class ZeroCenteredLinearSpreadLaplaceModelLayer(ExponentialFamilyModelLayerBase)
         mult = raw_params.unsqueeze(0).repeat(z_prev.shape[0], 1)
         return -1 / softplus(mult * z_prev)
 
-    def generate_sufficient_statistic(self, z: T):
+    def generate_sufficient_statistic(self, z: _T):
         return z.abs()
     
     def mean(self, z_prev: Union[None, T]):
@@ -38,7 +38,7 @@ class ZeroCenteredLinearSpreadLaplaceModelLayer(ExponentialFamilyModelLayerBase)
     def raw_parameter_values(self):
         return self.spread_multiplier
 
-    def replace_raw_parameters(self, new_parameters: T):
+    def replace_raw_parameters(self, new_parameters: _T):
         assert tuple(new_parameters.shape) == (self.output_dim,)
         self.spread_multiplier.data = new_parameters.data
     
@@ -53,7 +53,7 @@ class ZeroCenteredLinearSpreadLaplaceModelLayer(ExponentialFamilyModelLayerBase)
             z_prev = z_prev.unsqueeze(1)
         return softplus(mult * z_prev)
         
-    def sample_conditional_from_natural_parameter(self, natural_parameter: Union[T, None]):
+    def sample_conditional_from_natural_parameter(self, natural_parameter: Union[_T, None]):
         "Sample from zero centered Laplace"
         scale = -1 / natural_parameter
         shape = natural_parameter.shape

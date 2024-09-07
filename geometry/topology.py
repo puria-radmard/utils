@@ -3,7 +3,7 @@ import itertools
 
 
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 from torch import tensor
 
 import copy
@@ -33,9 +33,9 @@ def check_and_map(
 
 
 class Points:
-    def __init__(self, coords: Union[T, Points]) -> None:
+    def __init__(self, coords: Union[_T, Points]) -> None:
         if isinstance(coords, Points):
-            point_coords: T = coords.coords
+            point_coords: _T = coords.coords
         else:
             point_coords = coords
         assert len(point_coords.shape) == 2
@@ -62,9 +62,9 @@ class Points:
 
 
 class BatchedPoints(Points):
-    def __init__(self, coords: Union[T, BatchedPoints]) -> None:
+    def __init__(self, coords: Union[_T, BatchedPoints]) -> None:
         if isinstance(coords, Points):
-            point_coords: T = coords.coords.unsqueeze(1)
+            point_coords: _T = coords.coords.unsqueeze(1)
         else:
             point_coords = coords
         assert len(point_coords.shape) == 3
@@ -93,7 +93,7 @@ class RightRectangle:
     Cartesian product of <dim> intervals
     """
 
-    def __init__(self, left: T, right: T):
+    def __init__(self, left: _T, right: _T):
         assert (len(right.shape) == 1) and (len(left.shape) == 1)
         assert all(left < right) and (len(left) == len(right))
         self.left = left
@@ -269,7 +269,7 @@ class Manifold(RightRectangle, Atlas):
         space with an Atlas
     """
 
-    def __init__(self, set_left: T, set_right: T, charts: List[Chart], grid_count = 100):
+    def __init__(self, set_left: _T, set_right: _T, charts: List[Chart], grid_count = 100):
 
         RightRectangle.__init__(
             self, left=set_left, right=set_right

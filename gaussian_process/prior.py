@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 import torch
 from torch import nn
-from torch import Tensor as T
+from torch import Tensor as _T
 
 class GaussianProcessPrior(nn.Module, ABC):
     """
@@ -26,14 +26,14 @@ class GaussianProcessPrior(nn.Module, ABC):
         self.input_dim = input_dim
 
     @abstractmethod
-    def k(self, X1: T, X2: T):
+    def k(self, X1: _T, X2: _T):
         raise NotImplementedError
     
     @abstractmethod
     def reset_state_dict(self):
         raise NotImplementedError
 
-    def correlation_matrix(self, X1: T, X2: T = None):
+    def correlation_matrix(self, X1: _T, X2: _T = None):
         """
             X1 of shape [b1, d]
             X2 of shape [b2, d]
@@ -47,11 +47,11 @@ class GaussianProcessPrior(nn.Module, ABC):
             assert (len(feature_array.shape) == 2)
         return self.k(X1, X2)
 
-    def cov_cholesky(self, X: T):
+    def cov_cholesky(self, X: _T):
         "TODO: maybe do a low rank approximation? Functions are wiggly otherwise!"
         return torch.linalg.cholesky(self.correlation_matrix(X, X))
     
-    def sample(self, X: T, return_seed = False, seed = None):
+    def sample(self, X: _T, return_seed = False, seed = None):
         """
             Samples from prior distribution, given input feature array
         """
@@ -95,7 +95,7 @@ class ARDGaussianProcessPrior(GaussianProcessPrior):
         self.log_dimension_lengths.grad = None
         self.log_primary_length.grad = None
     
-    def k(self, X1: T, X2: T):
+    def k(self, X1: _T, X2: _T):
         # iterate over dimsions
         dimension_contributions = []
 
@@ -141,7 +141,7 @@ class KinkedSEGaussianProcessPrior(ARDGaussianProcessPrior):
             param=torch.nn.Parameter(torch.zeros(self.num_pairwise))
         )
     
-    def k(self, X1: T, X2: T):
+    def k(self, X1: _T, X2: _T):
         # TODO: support more than one kink! Would actually use self.num_pairwise!
         # Xi shape [Ni, 1]
 

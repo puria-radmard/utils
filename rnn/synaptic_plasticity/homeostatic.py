@@ -1,12 +1,12 @@
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 
 from purias_utils.rnn.layers.dales import BinaryMaskRecurrent
 from purias_utils.rnn.synaptic_plasticity.synapse_types import *
 
 
 def update_excitatory_input_homeostatically(
-    dales_matrix: BinaryMaskRecurrent, alpha_e: float, e_set: float, activity: T,
+    dales_matrix: BinaryMaskRecurrent, alpha_e: float, e_set: float, activity: _T,
     average_error_term: bool = False
 ):
     """
@@ -36,7 +36,7 @@ def update_excitatory_input_homeostatically(
 
 
 def update_inhibitory_input_homeostatically(
-    dales_matrix: BinaryMaskRecurrent, alpha_i: float, i_set: float, activity: T,
+    dales_matrix: BinaryMaskRecurrent, alpha_i: float, i_set: float, activity: _T,
     average_error_term: bool = False
 ):
     """
@@ -66,7 +66,7 @@ def update_inhibitory_input_homeostatically(
 
 
 def update_excitatory_input_cross_homeostatically(
-    dales_matrix: BinaryMaskRecurrent, alpha_e: float, i_set: float, activity: T,
+    dales_matrix: BinaryMaskRecurrent, alpha_e: float, i_set: float, activity: _T,
     average_error_term: bool = False
 ):
     """
@@ -95,7 +95,7 @@ def update_excitatory_input_cross_homeostatically(
 
 
 def update_inhibitory_input_cross_homeostatically(
-    dales_matrix: BinaryMaskRecurrent, alpha_i: float, e_set: float, activity: T,
+    dales_matrix: BinaryMaskRecurrent, alpha_i: float, e_set: float, activity: _T,
     average_error_term: bool = False
 ):
     """

@@ -37,7 +37,6 @@ if __name__ == '__main__':
     for task_name in rules_dict['all']:
 
         ruleset = 'all'
-        # task_name = sys.argv[1]
         input, target, c_mask, y_loc = generate_data_batch(task_name, device='cpu')
 
         fig, axes = plt.subplots(2)

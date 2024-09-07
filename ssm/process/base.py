@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 
 from typing import List
 from abc import ABC, abstractmethod
 
 class ProcessBase(ABC):
 
-    previous_value: T
+    previous_value: _T
     parents: List[ProcessBase] = []
 
     @abstractmethod
@@ -19,7 +19,7 @@ class ProcessBase(ABC):
     def __call__(self, *args, **kwargs):
         raise NotImplementedError
 
-    def reinitialise(self, new_value: T):
+    def reinitialise(self, new_value: _T):
         self.previous_value = new_value
 
     def generate(self, num_steps, *args, **kwargs):
@@ -46,6 +46,9 @@ class ProcessBase(ABC):
         new_process.add_parent(self)
         new_process.add_parent(other)
         return new_process
+
+    def to(self):
+        return self
 
 
 class FlatProcess(ProcessBase):

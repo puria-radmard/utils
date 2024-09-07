@@ -6,14 +6,14 @@ from typing import Union
 import numpy as np
 
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 from torch.nn import functional as F
 
-def outbound_degree(W: T):
+def outbound_degree(W: _T):
     return W.abs().sum(1)
 
 
-def communicability_reg(W: T):
+def communicability_reg(W: _T):
     degree = outbound_degree(W=W)
     sqrtdegree =  torch.diag(1 / torch.sqrt(degree))
     exponent = sqrtdegree @ W.abs() @ sqrtdegree
@@ -129,7 +129,7 @@ def small_worldness(param, thres_prop, num_random_graphs):
 
 
 def weights_fundamentals(
-    param: T, distances: T,
+    param: _T, distances: _T,
 ):
     weights = param.abs().flatten().numpy()
     diag_weights = param.diag().abs().flatten().numpy()

@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from torch import Tensor as T
+from torch import Tensor as _T
 from torch.nn.functional import binary_cross_entropy, sigmoid
 
 from typing import List
@@ -39,11 +39,11 @@ class BinaryHelmholtz(nn.Module):
         "Draw from P[u|v,G] as required in the sleep phase"
         return self.generative_model.full_generate(batch_size=batch_size)
 
-    def draw_latent(self, data: T):
+    def draw_latent(self, data: _T):
         "Draw from P[v|u,W] as required in the wake phase"
         return self.recognition_model.full_generate(data=data)
 
-    def wake_phase_losses(self, data_minibatch: T):
+    def wake_phase_losses(self, data_minibatch: _T):
         """
             Draw z from each layer conditioned on sampled data, 
             then pass each through the relevant layer in the generative model
@@ -95,29 +95,29 @@ class BinaryHelmholtzEasyMode(nn.Module):
         logit_result = self.g.unsqueeze(0).repeat(batch_size, 1)
         return logit_result if logit else sigmoid(logit_result)
 
-    def generative_model_conditional_bernoulli(self, latent_vs: T, logit = False):
+    def generative_model_conditional_bernoulli(self, latent_vs: _T, logit = False):
         "Eq 10.42"
         assert latent_vs.shape[-1] == self.latent_dim
         logit_result = self.G_and_h(latent_vs)
         return logit_result if logit else sigmoid(logit_result)
     
-    def recognition_model_variational_bernoulli(self, data_us: T, logit = False):
+    def recognition_model_variational_bernoulli(self, data_us: _T, logit = False):
         "Eq 10.43"
         assert data_us.shape[-1] == self.data_dim
         logit_result = self.W_and_w(data_us)
         return logit_result if logit else sigmoid(logit_result)
 
-    def draw_data(self, bernoulli: T):
+    def draw_data(self, bernoulli: _T):
         "Draw from P[u|v,G] as required in the sleep phase"
         assert bernoulli.shape[-1] == self.data_dim
         return torch.bernoulli(bernoulli)
 
-    def draw_latent(self, bernoulli: T):
+    def draw_latent(self, bernoulli: _T):
         "Draw from P[v|u,W] as required in the wake phase"
         assert bernoulli.shape[-1] == self.latent_dim
         return torch.bernoulli(bernoulli)
 
-    def wake_phase_losses(self, minibatch: T):
+    def wake_phase_losses(self, minibatch: _T):
         """
             Provide a batch of u (drawn from the real distribution, i.e. the real dataset),
             and draw a latent variable from the current recognition distribution.

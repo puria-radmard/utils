@@ -3,7 +3,7 @@ from typing import List, Callable, Union
 from purias_utils.geometry.topology import Points, BatchedPoints
 
 from torch.autograd import grad
-from torch import Tensor as T
+from torch import Tensor as _T
 
 from tqdm import tqdm
 

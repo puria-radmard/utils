@@ -1,7 +1,7 @@
 from typing import Iterable
 
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 from typing import Type, Union, List
 
 from purias_utils.rnn.layers.base import WeightLayer
@@ -13,7 +13,7 @@ class BinaryMaskRecurrent(WeightLayer):
     NB: if doing Dale's law for recurrent matrix, should use this to wrap an AbsWeightLayer
     """
 
-    def __init__(self, base_matrix: Union[T, Type[WeightLayer]], exc_indexes: Iterable, exc_mask = 1.0, inh_mask = -1.0):
+    def __init__(self, base_matrix: Union[_T, Type[WeightLayer]], exc_indexes: Iterable, exc_mask = 1.0, inh_mask = -1.0):
         super().__init__(base_matrix)
         self.exc_indexes = set(exc_indexes)
         self.inh_indexes = set([i for i in range(self.num_neurons) if i not in exc_indexes])
@@ -48,10 +48,23 @@ class BinaryMaskRecurrent(WeightLayer):
 
 
 
+class MatrixShapedBinaryMaskRecurrent(BinaryMaskRecurrent):
+
+    "Used in mixer architectures. Input comes in as shape [... P, C, Ch] and weight is of shape [P, C, C]"
+
+    def __init__(self, base_matrix: Union[_T, Type[WeightLayer]], exc_indexes: Iterable, exc_mask=1, inh_mask=-1):
+        super().__init__(base_matrix, exc_indexes, exc_mask, inh_mask)
+        if (inh_mask != 1.0) or (exc_indexes != []):
+            raise NotImplementedError
+
+    def forward(self, x: _T):
+        return self.masked_weight @ x
+
+
 
 class BinaryMaskForward(BinaryMaskRecurrent):
 
-    def __init__(self, base_matrix: Union[T, Type[WeightLayer]], exc_indexes: Iterable, exc_mask=1, inh_mask=0, exempt_indices: List[int]=[0]):
+    def __init__(self, base_matrix: Union[_T, Type[WeightLayer]], exc_indexes: Iterable, exc_mask=1, inh_mask=0, exempt_indices: List[int]=[0]):
         super().__init__(base_matrix, exc_indexes, exc_mask, inh_mask)
         self.exempt_indices = exempt_indices
 

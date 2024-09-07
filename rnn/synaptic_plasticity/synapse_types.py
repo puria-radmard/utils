@@ -1,5 +1,5 @@
 import torch
-from torch import Tensor as T
+from torch import Tensor as _T
 from purias_utils.rnn.layers.dales import BinaryMaskRecurrent
 
 __all__ = [
@@ -51,7 +51,7 @@ def get_dales_i2i(dales_matrix: BinaryMaskRecurrent, _abs=True):
 
 
 def adjust_dales_matrix_by_synapse_type(
-    dales_matrix: BinaryMaskRecurrent, new_weights: T, from_type: str, to_type: str
+    dales_matrix: BinaryMaskRecurrent, new_weights: _T, from_type: str, to_type: str
     ):
 
     "Adjusts actual values, so uses self.raw_matrix.data"
@@ -69,16 +69,16 @@ def adjust_dales_matrix_by_synapse_type(
 
 
 
-def adjust_dales_e2e(dales_matrix: BinaryMaskRecurrent, new_weights: T):
+def adjust_dales_e2e(dales_matrix: BinaryMaskRecurrent, new_weights: _T):
     adjust_dales_matrix_by_synapse_type(dales_matrix, new_weights, from_type='e', to_type='e')
 
-def adjust_dales_e2i(dales_matrix: BinaryMaskRecurrent, new_weights: T):
+def adjust_dales_e2i(dales_matrix: BinaryMaskRecurrent, new_weights: _T):
     adjust_dales_matrix_by_synapse_type(dales_matrix, new_weights, from_type='e', to_type='i')
 
-def adjust_dales_i2e(dales_matrix: BinaryMaskRecurrent, new_weights: T):
+def adjust_dales_i2e(dales_matrix: BinaryMaskRecurrent, new_weights: _T):
     adjust_dales_matrix_by_synapse_type(dales_matrix, new_weights, from_type='i', to_type='e')
 
-def adjust_dales_i2i(dales_matrix: BinaryMaskRecurrent, new_weights: T):
+def adjust_dales_i2i(dales_matrix: BinaryMaskRecurrent, new_weights: _T):
     adjust_dales_matrix_by_synapse_type(dales_matrix, new_weights, from_type='i', to_type='i')
 
 
