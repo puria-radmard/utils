@@ -6,9 +6,9 @@ from typing import Optional
 from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model import VALID_EMISSION_TYPES
 
 from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.swap_function import NonParametricSwapFunctionExpCos, NonParametricSwapFunctionWeiland, SpikeAndSlabSwapFunction
-from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.emissions import VonMisesParametricErrorsEmissions, WrappedCauchyParametricErrorsEmissions, WrappedStableParametricErrorsEmissions, UniformParametricErrorsEmissions, SmoothedWeightedDeltasErrorsEmissions
+from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.emissions import VonMisesParametricErrorsEmissions, WrappedStableParametricErrorsEmissions, UniformParametricErrorsEmissions, SmoothedWeightedDeltasErrorsEmissions
 from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model import NonParametricSwapErrorsGenerativeModel
-from purias_utils.error_modelling_torus.non_parametric_error_model.variational_approx import NonParametricSwapErrorsVariationalModel, FixedCueLocationNonParametricSwapErrorsVariationalModel
+from purias_utils.error_modelling_torus.non_parametric_error_model.variational_approx import NonParametricSwapErrorsVariationalModel
 
 
 def setup_model_whole(
@@ -53,7 +53,6 @@ def setup_model_whole(
     if emission_type in VALID_EMISSION_TYPES:
         emission_type_classes = {
             "von_mises": VonMisesParametricErrorsEmissions,
-            "wrapped_cauchy": WrappedCauchyParametricErrorsEmissions,
             "wrapped_stable": WrappedStableParametricErrorsEmissions,
             "uniform": UniformParametricErrorsEmissions,
         }
@@ -85,7 +84,7 @@ def setup_model_whole(
         if shared_swap_function:
             variational_model = make_variational_model(None)
         else:
-            variational_models = {N: make_variational_model(None) for min_sep_set_size, N in zip(min_seps, all_set_sizes)}
+            variational_models = {N: make_variational_model(None) for N in all_set_sizes}
 
 
 

@@ -52,15 +52,20 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
 
         if symmetricality_constraint:   # For inducing points
             self.all_quadrant_mults = []
-            for quadrant_mult in list(product([1.0, -1.0], repeat = self.num_features)):
+            for quadrant_mult in list(product([-1.0, 1.0], repeat = self.num_features)):
                 self.all_quadrant_mults.append(torch.tensor(quadrant_mult).unsqueeze(0))
+
+            assert self.fix_inducing_point_locations, 'Not sure how to do this yet!'
 
         if min_seps is not None:
             assert list(min_seps.shape) == [num_features]
-        
-        initial_inducing_points_per_axis = [self.generate_points_around_circle_with_min_separation(R_per_dim, ms, symmetricality_constraint) for ms in min_seps]
+            initial_inducing_points_per_axis = [self.generate_points_around_circle_with_min_separation(R_per_dim, ms, symmetricality_constraint) for ms in min_seps]
+        else:
+            initial_inducing_points_per_axis = [self.generate_points_around_circle_with_min_separation(R_per_dim, None, symmetricality_constraint) for _ in range(num_features)]
         torus_points = self.generate_torus_points_from_circle_points(initial_inducing_points_per_axis)
         self.R = R_per_dim * num_features
+
+        self.min_seps = min_seps
 
         if fix_inducing_point_locations:
             self.inducing_points_tilde = torus_points
@@ -69,10 +74,19 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         self.register_parameter('m_u_raw', nn.Parameter(torch.zeros(len(self.inducing_points_tilde), dtype = torch.float64), requires_grad = True))
         
         if inducing_point_variational_parameterisation == 'gaussian':
-            self.register_parameter('S_uu_log_chol', nn.Parameter(torch.zeros(self.R, self.R, dtype = torch.float64), requires_grad = True))
+            
+            # # if symmetricality_constraint:
+            # #     # SEE THIS FOR ALL DETAILS ON NOTATION https://scicomp.stackexchange.com/questions/5050/cholesky-factorization-of-block-matrices
+            # #     # XXX: WRITE ALL OF THIS UP
+            # #     bs = self.R // len(self.all_quadrant_mults)  # block size
+            # #     self.register_parameter('S_uu_L_a_log', nn.Parameter(torch.zeros(bs, bs, dtype = torch.float64), requires_grad = True))
+            # #     self.register_parameter('S_uu_B', nn.Parameter(torch.zeros(bs, bs, dtype = torch.float64), requires_grad = True))
+
+            # # else:
+                self.register_parameter('S_uu_log_chol', nn.Parameter(torch.zeros(self.R, self.R, dtype = torch.float64), requires_grad = True))
 
     @staticmethod
-    def generate_points_around_circle_with_min_separation(R_d: int, min_sep: float, symmetricality_constraint: bool):
+    def generate_points_around_circle_with_min_separation(R_d: int, min_sep: Optional[float], symmetricality_constraint: bool):
         """
         if min sep = 0, code is self explanatory
         else:
@@ -81,8 +95,14 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
                 i.e. initial_inducing_points[0] - -pi == initial_inducing_points[1] - initial_inducing_points[0] == ... == pi - initial_inducing_points[-1]
             As such, this case requires even R_d
         """
-        if min_sep == 0.0:
-            initial_inducing_points = torch.linspace(-torch.pi, +torch.pi, R_d + 1)[:-1]
+        if min_sep == None or min_sep == 0.0:
+            if symmetricality_constraint:
+                assert R_d % 2 == 0.0
+                initial_inducing_points = torch.linspace(0.0, +torch.pi, R_d + 1)[1:-1:2]  # XXX: none at zero here!
+
+            else:
+                initial_inducing_points = torch.linspace(-torch.pi, +torch.pi, R_d + 1)[:-1]
+
         else:
             assert R_d % 2 == 0.0
             neg_hemiphere_points = torch.linspace(-torch.pi, -min_sep, R_d)[1::2] # Double the points required so we can get the half diff at the start
@@ -92,9 +112,9 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             assert torch.isclose(neg_hemiphere_points[0] + torch.pi, (pos_hemiphere_points[1] - pos_hemiphere_points[0]) / 2)
             initial_inducing_points = torch.concat([neg_hemiphere_points, pos_hemiphere_points])
 
-        if symmetricality_constraint:
-            assert R_d % 2 == 0.0
-            initial_inducing_points = initial_inducing_points[-R_d//2:]
+            if symmetricality_constraint:
+                assert R_d % 2 == 0.0
+                initial_inducing_points = torch.linspace(min_sep, +torch.pi, R_d+1)[1::2]  # XXX: none at zero here!
 
         return initial_inducing_points
 
@@ -120,7 +140,8 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             positive_quadrant = rectify_angles(self.inducing_points_tilde)
             all_quadrants = []
             for quadrant_mult in self.all_quadrant_mults:
-                all_quadrants.append(positive_quadrant * quadrant_mult.to(positive_quadrant.device))
+                new_quadrant = positive_quadrant * quadrant_mult.to(positive_quadrant.device)
+                all_quadrants.append(new_quadrant)
             return torch.concat(all_quadrants)
         else:
             return rectify_angles(self.inducing_points_tilde)
@@ -129,7 +150,11 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
     def m_u(self):
         if self.symmetricality_constraint:
             positive_quadrant = self.m_u_raw
-            return torch.concat([positive_quadrant for _ in self.all_quadrant_mults])
+            all_quadrants = []
+            for quadrant_mult in self.all_quadrant_mults:
+                new_quadrant = positive_quadrant
+                all_quadrants.append(new_quadrant)
+            return torch.concat(all_quadrants)
         else:
             return self.m_u_raw
 
@@ -137,10 +162,38 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
     def S_uu(self):
         if self.inducing_point_variational_parameterisation == 'vanilla':
             return 0.0
-        chol = torch.tril(self.S_uu_log_chol)
-        diag_index = range(self.R)
-        chol[diag_index, diag_index] = chol[diag_index, diag_index].exp()
+
+        # elif self.symmetricality_constraint:
+            
+        #     assert self.num_features == 1, "Havne't done this for D>1 yet!! needs complete rechanging"
+
+        #     L_a = torch.tril(self.S_uu_L_a_log)
+        #     L_a[range(len(L_a)),range(len(L_a))] = L_a[range(len(L_a)),range(len(L_a))].exp()
+        #     L_a_inv = torch.linalg.inv(L_a)
+
+        #     A = L_a @ L_a.T
+        #     A_inv = torch.linalg.inv(A)
+        #     B = self.S_uu_B
+        #     S = A - B @ A_inv @ B.T
+        #     try:
+        #         L_s = torch.linalg.cholesky(S)
+        #     except:
+        #         import pdb; pdb.set_trace()
+
+        #     chol = torch.zeros(self.R, self.R, dtype = L_s.dtype, device = L_s.device)
+            
+        #     bs = self.R // len(self.all_quadrant_mults) # block size
+        #     chol[:bs,:bs] = L_a
+        #     chol[bs:,bs:] = L_s
+        #     chol[bs:,:bs] = B @ L_a_inv.T
+
+        else:
+            chol = torch.tril(self.S_uu_log_chol)
+            diag_index = range(self.R)
+            chol[diag_index, diag_index] = chol[diag_index, diag_index].exp()
+
         S_uu = chol @ chol.T
+
         return S_uu
 
     def kl_loss(self, K_uu: _T, K_uu_inv: _T) -> _T:
@@ -159,35 +212,39 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         mu_term = self.m_u @ (K_uu_inv @ self.m_u)
         return 0.5 * (det_term + trace_term + mu_term - self.R)
 
-    def variational_gp_inference(self, k_ud: _T, K_dd: _T, K_uu: _T, K_uu_inv: _T):
+    def variational_gp_inference(self, k_ud: _T, K_dd: _T, K_uu_inv: _T):
         """
             k_ud is the kernel evaluated on the inducing points against the real data -> [R, MN]
             K_dd is the kernel evaluated on the real delta data -> [M, M]
             K_uu is the kernel evaluated on the inducing points -> [R, R]
-                We also need to inverse of this!
+                We need to inverse of this!
 
             Infer GP parameters for q(f)
         """
         if self.inducing_point_variational_parameterisation == 'vanilla':
             sigma = K_dd - (k_ud.T @ (K_uu_inv @ k_ud))
         elif self.inducing_point_variational_parameterisation == 'gaussian':
-            sigma = K_dd - (k_ud.T @ (K_uu_inv @ ((K_uu - self.S_uu) @ (K_uu_inv @ k_ud))))
+            sigma = K_dd - (k_ud.T @ K_uu_inv @ k_ud) + (k_ud.T @ K_uu_inv @ self.S_uu @ K_uu_inv @ k_ud)
         mu = k_ud.T @ (K_uu_inv @ self.m_u)
-        sigma_chol = torch.linalg.cholesky(sigma)
+        sigma_chol = torch.linalg.cholesky(sigma + 1.0e-1 *torch.eye(sigma.shape[0], device = sigma.device, dtype = sigma.dtype))
         # try:
         #     sigma_chol = torch.linalg.cholesky(sigma)
-        # except torch._C._LinAlgError as e:
-        #     print(e)
-        #     eigval, eigvec = torch.linalg.eig(sigma)
-        #     eigval, eigvec = eigval.real, eigvec.real
-        #     eigval[eigval < 0.0] = 1e-5
-        #     sigma_recon = (eigvec @ torch.diag(eigval) @ eigvec.T)
-        #     print('Reconstruction error:', (sigma_recon - sigma).abs().max().item())
-        #     try:
-        #         sigma_chol = torch.linalg.cholesky(sigma_recon)
-        #     except torch._C._LinAlgError as e2:
-        #         print(e2)
-        #         import pdb; pdb.set_trace()
+        # except:
+        #     sigma_chol = torch.linalg.cholesky(sigma + 1e-3 *torch.eye(sigma.shape[0], device = sigma.device, dtype = sigma.dtype))
+        # # try:
+        # #     sigma_chol = torch.linalg.cholesky(sigma)
+        # # except torch._C._LinAlgError as e:
+        # #     print(e)
+        # #     eigval, eigvec = torch.linalg.eig(sigma)
+        # #     eigval, eigvec = eigval.real, eigvec.real
+        # #     eigval[eigval < 0.0] = 1e-5
+        # #     sigma_recon = (eigvec @ torch.diag(eigval) @ eigvec.T)
+        # #     print('Reconstruction error:', (sigma_recon - sigma).abs().max().item())
+        # #     try:
+        # #         sigma_chol = torch.linalg.cholesky(sigma_recon)
+        # #     except torch._C._LinAlgError as e2:
+        # #         print(e2)
+        # #         import pdb; pdb.set_trace()
         return mu, sigma, sigma_chol   # [MN], [MN, MN], [MN, MN]
 
     def variational_gp_inference_mean_only(self, k_ud: _T, K_uu_inv: _T):
@@ -203,9 +260,8 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
     
     def reparameterised_sample(self, num_samples: int, mu: _T, sigma_chol: _T, M: int, N: int):
         deduped_MN = mu.shape[0]
-        eps = torch.randn(num_samples, deduped_MN, dtype = torch.float64) # [I, dedup size]
-        eps = eps.to(sigma_chol.device)
-        model_evals = mu.unsqueeze(0) + (eps @ sigma_chol.T.abs()) # [I, dedup size]
+        eps = torch.randn(num_samples, deduped_MN, dtype = mu.dtype, device = mu.device) # [I, dedup size]
+        model_evals = mu.unsqueeze(0) + (eps @ sigma_chol.T) # [I, dedup size]
         readded_model_evals = self.reinclude_model_evals(model_evals, M, N, num_samples)
         return readded_model_evals
 
@@ -248,54 +304,3 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         dedup_deltas = flattened_deltas[unique_indices]
         return dedup_deltas
         
-
-
-
-class FixedCueLocationNonParametricSwapErrorsVariationalModel(NonParametricSwapErrorsVariationalModel):
-
-    """
-    Same as above, except the locations of inducing points on the torus are fixed along selected axes.
-
-    Default parameters are for Bays 2009, where location is fixed to 8 points around the circle
-    """
-
-    def __init__(self, free_direction_Z_count: int, X: _T = None, num_features: int = 2, fixed_feature_axes = [0], fixed_features_location_counts = [8]):
-
-        super(NonParametricSwapErrorsVariationalModel, self).__init__()
-
-        assert 0 < len(fixed_feature_axes) == len(fixed_features_location_counts) < num_features
-        if num_features != 2:
-            raise NotImplementedError
-        if fixed_feature_axes != [0]:
-            raise NotImplementedError('Defining initial_inducing_points_free_direction and self.Z needs reworking in this case!')
-        
-        self.R = int(free_direction_Z_count * prod(fixed_features_location_counts))
-
-        if X is None:
-            initial_inducing_points_fixed_direction = torch.linspace(0, 2*torch.pi, fixed_features_location_counts[0]+1)[:-1]
-            initial_inducing_points_free_direction = torch.linspace(0, 2*torch.pi, free_direction_Z_count+1)[:-1]
-            grid_x, grid_y = torch.meshgrid(initial_inducing_points_fixed_direction, initial_inducing_points_free_direction, indexing='ij')
-            
-            torus_points = torch.stack([grid_x, grid_y], -1).reshape(self.R, 2).to(torch.float64)
-
-            free_feature_axes = sorted(list(set(range(num_features)) - set(fixed_feature_axes)))
-            fixed_axis_torus_points = torus_points[:,fixed_feature_axes]
-            free_axis_torus_points = torus_points[:,free_feature_axes]
-        else:
-            raise ValueError('Providing inducing points is deprecated')
-
-        self.fixed_axis_torus_points = fixed_axis_torus_points
-        self.register_parameter('inducing_points_tilde', nn.Parameter(free_axis_torus_points, requires_grad = True))
-        self.register_parameter('m_u', nn.Parameter(torch.zeros(self.R, dtype = torch.float64), requires_grad = True))
-        self.register_parameter('S_uu_log_chol', nn.Parameter(torch.zeros(self.R, self.R, dtype = torch.float64), requires_grad = True))
-
-
-    @property
-    def Z(self):
-        inducing_points = torch.concat([self.fixed_axis_torus_points, self.inducing_points_tilde], -1)
-        return rectify_angles(inducing_points)
-
-    def to(self, *args, **kwargs):
-        super().to(*args, **kwargs)
-        self.fixed_axis_torus_points = self.fixed_axis_torus_points.to(*args, **kwargs)
-        return self

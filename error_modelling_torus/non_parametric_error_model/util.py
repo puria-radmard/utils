@@ -5,35 +5,13 @@ from purias_utils.util.api import return_as_obj
 from purias_utils.error_modelling_torus.non_parametric_error_model.variational_approx import NonParametricSwapErrorsVariationalModel
 from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model import NonParametricSwapErrorsGenerativeModel
 
-def likelihood_inner(data, generative_model: NonParametricSwapErrorsGenerativeModel, training_method, pi_vectors, exp_f_evals, return_posterior: bool):
-    """
-    data expected in shape:
-        if error:   [M, N]      - all errors needed because this sample of pi_vectors may choosen any beta - in fact we marginalise out beta...
-        if beta:    [M]         - integers between 0 and N inclusive
-        if pi:      [M, N+1]    - valid distributions along axis 1
-    """
-    posterior_vectors, unaggregated_lh = None, None
-    if training_method == 'error':
-        llh_term, posterior_vectors, unaggregated_lh = generative_model.get_marginalised_log_likelihood(
-            estimation_deviations = data, pi_vectors = pi_vectors, return_posterior = return_posterior
-        )
-    elif training_method == 'beta':
-        llh_term = generative_model.get_component_likelihood(
-            selected_components = data, pi_vectors = pi_vectors
-        )
-    elif training_method == 'pi':
-        llh_term = generative_model.get_categorical_likelihood(
-            real_pi_vectors = data, exp_f_evals = exp_f_evals
-        )
-    return llh_term, posterior_vectors, unaggregated_lh
 
-
-def get_elbo_terms(variational_model: NonParametricSwapErrorsVariationalModel, generative_model: NonParametricSwapErrorsGenerativeModel, deltas, data, M, N, I, training_method, return_kl = True, return_posterior = False):
+def get_elbo_terms(variational_model: NonParametricSwapErrorsVariationalModel, generative_model: NonParametricSwapErrorsGenerativeModel, deltas, data, I, training_method, return_kl = True):
     
     R = variational_model.R
+    batch_size, set_size = deltas.shape[:2]
     
     deduplicated_deltas = variational_model.deduplicate_deltas(deltas)
-    set_size = deltas.shape[1]
 
     # Use kernel all here:
     K_dd = generative_model.swap_function.evaluate_kernel(set_size, deduplicated_deltas)
@@ -53,23 +31,30 @@ def get_elbo_terms(variational_model: NonParametricSwapErrorsVariationalModel, g
 
     # Make variational inferences for q(f)
     mu, sigma, sigma_chol = variational_model.variational_gp_inference(
-        k_ud=k_ud, K_dd=K_dd, K_uu=K_uu, K_uu_inv=K_uu_inv
+        k_ud=k_ud, K_dd=K_dd, K_uu_inv=K_uu_inv
     )
 
     # Get the samples of f evaluated at the data
     f_samples = variational_model.reparameterised_sample(
         num_samples = I, mu = mu, sigma_chol = sigma_chol, 
-        M = M, N = N
+        M = batch_size, N = set_size
     )
 
     pi_vectors, exp_f_evals = generative_model.swap_function.generate_pi_vectors(
-        N, model_evaulations = f_samples, return_exp_grid = True
+        set_size, model_evaulations = f_samples, return_exp_grid = True
     )
 
     # Get the ELBO first term, depending on training mode (data is usually errors)
-    llh_term, posterior, unaggregated_lh = likelihood_inner(data, generative_model, training_method, pi_vectors, exp_f_evals, return_posterior)
+    if training_method == 'error':
+        llh_term, posterior, unaggregated_lh = generative_model.get_marginalised_log_likelihood(
+            estimation_deviations = data, pi_vectors = pi_vectors
+        )
+    elif training_method == 'beta':
+        llh_term = generative_model.get_component_log_likelihood(
+            selected_components = data, pi_vectors = pi_vectors
+        )
+        posterior, unaggregated_lh = None, None
 
-    # if quick_scatter: 
     #     import matplotlib.pyplot as plt
     #     plt.clf()
     #     plt.figure()
@@ -82,11 +67,11 @@ def get_elbo_terms(variational_model: NonParametricSwapErrorsVariationalModel, g
 
 def training_step(
     generative_model, variational_model, deltas, errors, 
-    M, N, I, D, training_method,
-    threshold_parameter = 0.95, reg_weighting = 10.0, return_posterior = False,
+    I, D, training_method,
+    threshold_parameter = 0.95, reg_weighting = 10.0,
 ):
 
-    llh_term, kl_term, unaggregated_lh, posterior, pi_vectors, exp_f_evals = get_elbo_terms(variational_model, generative_model, deltas, errors, M, N, I, training_method, True, return_posterior)
+    llh_term, kl_term, unaggregated_lh, posterior, pi_vectors, exp_f_evals = get_elbo_terms(variational_model, generative_model, deltas, errors, I, training_method, True)
 
     pdists = (variational_model.Z.unsqueeze(1) - variational_model.Z).abs()   # [R, R, D]
     tril_idx = torch.tril_indices(variational_model.R, variational_model.R, -1)
@@ -100,15 +85,23 @@ def training_step(
 
 
 def get_elbo_terms_spike_and_slab(
-    generative_model: NonParametricSwapErrorsGenerativeModel, errors, M, N, training_method, return_posterior = True
+    generative_model: NonParametricSwapErrorsGenerativeModel, errors, M, N, training_method
 ):
     pi_vectors, exp_f_evals = generative_model.swap_function.generate_pi_vectors(
         set_size = N, batch_size = M, return_exp_grid = True
     )
 
-    llh_term, posterior = likelihood_inner(errors, generative_model, training_method, pi_vectors, exp_f_evals, return_posterior)
+    if training_method == 'error':
+        llh_term, posterior, unaggregated_lh = generative_model.get_marginalised_log_likelihood(
+            estimation_deviations = errors, pi_vectors = pi_vectors
+        )
+    elif training_method == 'beta':
+        llh_term = generative_model.get_component_log_likelihood(
+            selected_components = errors, pi_vectors = pi_vectors
+        )
+        posterior, unaggregated_lh = None, None
 
-    return llh_term, posterior, pi_vectors, exp_f_evals
+    return llh_term, unaggregated_lh, posterior, pi_vectors, exp_f_evals
 
 
 
@@ -133,7 +126,7 @@ def inference_inner(set_size, generative_model: NonParametricSwapErrorsGenerativ
 
         # Make variational inferences for q(f)
         mu, sigma, sigma_chol = variational_model.variational_gp_inference(
-            k_ud=k_ud, K_dd=K_dd, K_uu=K_uu, K_uu_inv=K_uu_inv
+            k_ud=k_ud, K_dd=K_dd, K_uu_inv=K_uu_inv
         )
 
     return kl_term, mu, sigma, sigma_chol

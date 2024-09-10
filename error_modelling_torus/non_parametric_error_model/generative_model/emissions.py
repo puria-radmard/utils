@@ -4,6 +4,8 @@ import torch
 from torch import nn
 from torch import Tensor as _T
 
+from typing import Optional
+
 import numpy as np
 
 from torch.distributions import Dirichlet, VonMises, Cauchy, Uniform
@@ -55,12 +57,12 @@ class ErrorsEmissionsBase(nn.Module):
     def evaluate_emissions_pdf_on_circle(self, set_size: int, num_test_points = 360, device = 'cuda', **llh_kwargs):
         theta_axis = torch.linspace(-torch.pi, torch.pi, num_test_points+1)[:-1].to(device)
         with torch.no_grad():
-            likelihood = self.individual_component_log_likelihoods_from_estimate_deviations(
+            likelihood = self.individual_component_likelihoods_from_estimate_deviations(
                 set_size=set_size, estimation_deviations=theta_axis.unsqueeze(-1), **llh_kwargs
-            ).exp()[0,:,1]
+            )[0,:,1]
         return theta_axis.cpu().numpy(), likelihood.cpu().numpy()
 
-    def individual_component_log_likelihoods_from_estimate_deviations(self, set_size: int, estimation_deviations: _T) -> _T:
+    def individual_component_likelihoods_from_estimate_deviations(self, set_size: int, estimation_deviations: _T) -> _T:
         raise NotImplementedError
 
 
@@ -70,10 +72,10 @@ class ParametricErrorsEmissionsBase(ErrorsEmissionsBase):
     def emission_parameter(self, set_size):
         raise NotImplementedError
 
-    def individual_component_log_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T):
+    def individual_component_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T):
         raise NotImplementedError
 
-    def individual_component_log_likelihoods_from_estimate_deviations(self, set_size: int, estimation_deviations: _T):
+    def individual_component_likelihoods_from_estimate_deviations(self, set_size: int, estimation_deviations: _T):
         """
         estimation_deviations ([M, N])  = rectify(estimates - zeta_c)
         
@@ -83,10 +85,10 @@ class ParametricErrorsEmissionsBase(ErrorsEmissionsBase):
         However, estimation_deviations can come in any shape [..., N] 
             - this is used for example in NonParametricModelDrivenMultipleOrientationDelayedSingleEstimationTask where there is a batch and a trial axis at the front
         """
-        log_prob = self.individual_component_log_likelihoods_from_estimate_deviations_inner(set_size, estimation_deviations)
+        emission_component_probs = self.individual_component_likelihoods_from_estimate_deviations_inner(set_size, estimation_deviations)
         Mdims = estimation_deviations.shape[:-1]
-        uniform_component = torch.ones(*Mdims, 1).to(estimation_deviations.device) / (2 * torch.pi)
-        output = torch.concat([uniform_component.log(), log_prob], -1)
+        uniform_component_probs = torch.ones(*Mdims, 1).to(estimation_deviations.device) / (2 * torch.pi)
+        output = torch.concat([uniform_component_probs, emission_component_probs], -1)
         return output.unsqueeze(0)  # [1, (M...), N + 1]
 
 
@@ -107,10 +109,10 @@ class VonMisesParametricErrorsEmissions(ParametricErrorsEmissionsBase):
     def generate_samples(self, comp_means, set_size):
         return VonMises(loc = comp_means, concentration = self.emission_parameter(set_size)).sample()
 
-    def individual_component_log_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T):
+    def individual_component_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T):
         von_mises_concentration = self.emission_parameter(set_size)
         log_prob = (von_mises_concentration * torch.cos(estimation_deviations)) - math.log(2 * math.pi) - _log_modified_bessel_fn(von_mises_concentration, order=0)     # Always zero mean
-        return log_prob
+        return log_prob.exp()
 
 
 
@@ -134,11 +136,14 @@ class WrappedStableParametricErrorsEmissions(ParametricErrorsEmissionsBase):
     def emission_parameter(self, set_size):
         return torch.concat([self.alpha_stability_holder[str(set_size)].alpha, self.gamma_scale_holder[str(set_size)].gamma])
 
-    def generate_samples(self, comp_means, set_size):
+    def generate_samples(self, comp_means, set_size, alpha: Optional[float] = None, gamma: Optional[float] = None):
         "Method taken from Wikipedia!"
 
-        alpha = self.alpha_stability_holder[str(set_size)].alpha
-        gamma = self.gamma_scale_holder[str(set_size)].gamma
+        if alpha is None:
+            alpha = self.alpha_stability_holder[str(set_size)].alpha
+        if gamma is None:
+            gamma = self.gamma_scale_holder[str(set_size)].gamma
+
         sample_shape = comp_means.shape
 
         u_samples = (torch.rand(sample_shape).to(comp_means.device) * torch.pi) - (torch.pi / 2)
@@ -151,10 +156,14 @@ class WrappedStableParametricErrorsEmissions(ParametricErrorsEmissionsBase):
 
         return rectify_angles((gamma * x_samples) + comp_means)
 
-    def individual_component_log_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T):
+    def individual_component_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T, alpha: Optional[float] = None, gamma: Optional[float] = None):
         "Method taken from Arthur Pewsey, 2008"
-        alpha = self.alpha_stability_holder[str(set_size)].alpha
-        gamma = self.gamma_scale_holder[str(set_size)].gamma
+        
+        if alpha is None:
+            alpha = self.alpha_stability_holder[str(set_size)].alpha
+        if gamma is None:
+            gamma = self.gamma_scale_holder[str(set_size)].gamma
+
         gamma_to_the_alpha = torch.pow(gamma, alpha)
         
         result = torch.ones_like(estimation_deviations).to(estimation_deviations.device) / (2 * torch.pi)
@@ -167,37 +176,8 @@ class WrappedStableParametricErrorsEmissions(ParametricErrorsEmissionsBase):
             pth_term = (rho_p * (p * estimation_deviations).cos()) / torch.pi
             result = result + pth_term
         
-        return result.log()
+        return result
 
-
-
-class WrappedCauchyParametricErrorsEmissions(ParametricErrorsEmissionsBase):
-
-    def __init__(self, emissions_set_sizes: list) -> None:
-        super().__init__(emissions_set_sizes)
-
-        self.cauchy_scale_holder = (
-            CauchyScaleHolder() if emissions_set_sizes is None
-            else nn.ModuleDict({str(N): CauchyScaleHolder() for N in emissions_set_sizes})
-        )
-
-    def emission_parameter(self, set_size):
-        return self.cauchy_scale_holder[str(set_size)].scale
-
-    def generate_samples(self, comp_means, set_size):
-        return rectify_angles(Cauchy(loc = comp_means, scale = self.emission_parameter(set_size)).sample())
-
-    def individual_component_log_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T):
-        cauchy_gamma = self.emission_parameter(set_size)
-        wrapped_cauchy_pdf_truncation = 100
-        cauchy_norm_term = -math.log(math.pi) - cauchy_gamma.log()
-        cauchy_scaled_estimation_deviations = estimation_deviations / cauchy_gamma
-        wrapped_cauchy_pdf = (cauchy_norm_term - (1 + (cauchy_scaled_estimation_deviations)**2).log()).exp()
-        for i in range(1, wrapped_cauchy_pdf_truncation):
-            wrapped_cauchy_pdf = wrapped_cauchy_pdf + (cauchy_norm_term - (1 + (cauchy_scaled_estimation_deviations + (2 * torch.pi * i) / cauchy_gamma)**2).log()).exp()
-            wrapped_cauchy_pdf = wrapped_cauchy_pdf + (cauchy_norm_term - (1 + (cauchy_scaled_estimation_deviations - (2 * torch.pi * i) / cauchy_gamma)**2).log()).exp()
-        log_prob = wrapped_cauchy_pdf.log()
-        return log_prob
 
     
 
@@ -219,7 +199,7 @@ class UniformParametricErrorsEmissions(ParametricErrorsEmissionsBase):
         assert 0 <= halfwidth <= torch.pi
         return Uniform(low = comp_means - halfwidth, high = comp_means + halfwidth).sample()
 
-    def individual_component_log_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T):
+    def individual_component_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T):
         in_bump = estimation_deviations.abs() > self.emission_parameter(set_size)
         import pdb; pdb.set_trace(header = 'finish this! neginf part might cause problems')
         return None
@@ -273,154 +253,14 @@ class SmoothedWeightedDeltasErrorsEmissions(ErrorsEmissionsBase):
     def generate_samples(self, comp_means, set_size):
         return rectify_angles(comp_means + self.generate_residuals_samples(comp_means.shape, set_size))
 
-    def individual_component_log_likelihoods_from_estimate_deviations(self, set_size: int, estimation_deviations: _T, locations: _T = None, weights: _T = None):
+    def individual_component_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T, locations: _T = None, weights: _T = None):
         if weights is None:
             weights = self.delta_train_holder[str(set_size)].delta_weights
         if locations is None:
             locations = self.delta_train_holder[str(set_size)].delta_locations
         von_mises = VonMises(locations.unsqueeze(-1).unsqueeze(-1), self.delta_smoother_kappa)
-        log_prob = (weights.unsqueeze(-1).unsqueeze(-1) * von_mises.log_prob(estimation_deviations).exp()).sum(0).log()
+        emissions_prob = (weights.unsqueeze(-1).unsqueeze(-1) * von_mises.log_prob(estimation_deviations).exp()).sum(0)
         Mdims = estimation_deviations.shape[:-1]
         uniform_component = torch.ones(*Mdims, 1).to(estimation_deviations.device) / (2 * torch.pi)
-        output = torch.concat([uniform_component.log(), log_prob], -1)
+        output = torch.concat([uniform_component, emissions_prob], -1)
         return output.unsqueeze(0)  # [1, (M...), N + 1]
-
-
-
-class ParametricErrorsEmissions(ErrorsEmissionsBase):
-
-    def __init__(self, emissions_set_sizes: list, emission_type: str) -> None:
-
-        raise Exception('ParametricErrorsEmissions deprecated! Use a child class of ParametricErrorsEmissionsBase!')
-
-        super().__init__(emissions_set_sizes)
-
-        self.emission_type = emission_type
-
-        if emission_type == 'von_mises':
-            self.concentration_holder = (
-                ConcentrationParameterHolder() if emissions_set_sizes is None
-                else nn.ModuleDict({str(N): ConcentrationParameterHolder() for N in emissions_set_sizes})
-            )
-
-        elif emission_type == 'wrapped_cauchy':
-            self.cauchy_scale_holder = (
-                CauchyScaleHolder() if emissions_set_sizes is None
-                else nn.ModuleDict({str(N): CauchyScaleHolder() for N in emissions_set_sizes})
-            )
-
-        elif emission_type == 'uniform':
-            self.uniform_halfwidth_holder = (
-                UniformHalfWidthHolder() if emissions_set_sizes is None
-                else nn.ModuleDict({str(N): UniformHalfWidthHolder() for N in emissions_set_sizes})
-            )
-
-    def emission_parameter(self, set_size):
-        if self.emission_type == 'von_mises':
-            return self.concentration_holder[str(set_size)].concentration
-        
-        elif self.emission_type == 'wrapped_cauchy':
-            return self.cauchy_scale_holder[str(set_size)].scale
-        
-        elif self.emission_type == 'uniform':
-            return self.uniform_halfwidth_holder[str(set_size)].halfwidth
-
-    def generate_samples(self, comp_means, set_size):
-
-        if self.emission_type == 'von_mises':
-            return VonMises(loc = comp_means, concentration = self.emission_parameter(set_size)).sample()
-        
-        elif self.emission_type == 'wrapped_cauchy':
-            return rectify_angles(Cauchy(loc = comp_means, scale = self.emission_parameter(set_size)).sample())
-        
-        elif self.emission_type == 'uniform':
-            halfwidth = self.emission_parameter(set_size)
-            assert 0 <= halfwidth <= torch.pi
-            return Uniform(low = comp_means - halfwidth, high = comp_means + halfwidth).sample()
-
-    def generate_samples_with_different_emission(self, comp_means, set_size, emission_type):
-        """
-        TODO: Match some measure of circular spread!
-        """
-        assert emission_type in VALID_EMISSION_TYPES
-        assert emission_type != self.emission_type, "Do not use generate_samples_with_different_emission if using own emission type"
-
-        if self.emission_type == 'von_mises':
-            raise NotImplementedError
-
-        elif self.emission_type == 'wrapped_cauchy':
-            raise NotImplementedError
-
-        elif self.emission_type == 'uniform':
-            raise NotImplementedError
-
-    def circular_std(self, set_size: int):
-        emission_parameter = self.emission_parameter(set_size).item()
-
-        if self.emission_type == 'von_mises':
-            R = (_log_modified_bessel_fn(torch.tensor(emission_parameter), order=1).exp() / _log_modified_bessel_fn(torch.tensor(emission_parameter), order=0).exp())
-            R = R.item()
-
-        elif self.emission_type == 'wrapped_cauchy':
-            R = math.exp(- emission_parameter)
-
-        elif self.emission_type == 'uniform':
-            raise NotImplementedError
-
-        return (-2 * math.log(R))**0.5
-
-    def sample_from_components_with_different_emission(self, set_size: int, selected_components: _T, vm_means: _T, emission_type: str):
-        assert emission_type in VALID_EMISSION_TYPES
-
-        sample_set, reshaped_vm = self.fill_in_uniform_samples_and_begin_sampling(selected_components, vm_means)
-        
-        with torch.no_grad():     
-            for n in range(selected_components.max().item()):
-                n_sel = (selected_components == (n+1))
-                comp_means = reshaped_vm[n_sel][:,n]
-                if comp_means.numel() > 0:
-                    assert sample_set[n_sel].unique().item() == 0.0
-                    samples = self.generate_samples_with_different_emission(comp_means, set_size, emission_type)
-                    sample_set[n_sel] = samples
-
-        return sample_set       # [I, M]
-
-    def individual_component_log_likelihoods_from_estimate_deviations(self, set_size: int, estimation_deviations: _T):
-        """
-        estimation_deviations ([M, N])  = rectify(estimates - zeta_c)
-        
-        output is of size [1, M, N+1], where output[:,0] is likelihood of the uniform component (always 1/2pi)
-            Hanging 0th dimenion is there for self.get_marginalised_log_likelihood downstream...
-
-        However, estimation_deviations can come in any shape [..., N] 
-            - this is used for example in NonParametricModelDrivenMultipleOrientationDelayedSingleEstimationTask where there is a batch and a trial axis at the front
-        """
-
-        if self.emission_type == 'von_mises':
-            von_mises_concentration = self.emission_parameter(set_size)
-            log_prob = (von_mises_concentration * torch.cos(estimation_deviations)) - math.log(2 * math.pi) - _log_modified_bessel_fn(von_mises_concentration, order=0)     # Always zero mean
-        
-        elif self.emission_type == 'wrapped_cauchy':
-            cauchy_gamma = self.emission_parameter(set_size)
-            wrapped_cauchy_pdf_truncation = 100
-            # cauchy = Cauchy(loc = 0, scale = cauchy_gamma)
-            # wrapped_cauchy_pdf = cauchy.log_prob(estimation_deviations).exp()
-            cauchy_norm_term = -math.log(math.pi) - cauchy_gamma.log()
-            cauchy_scaled_estimation_deviations = estimation_deviations / cauchy_gamma
-            wrapped_cauchy_pdf = (cauchy_norm_term - (1 + (cauchy_scaled_estimation_deviations)**2).log()).exp()
-            for i in range(1, wrapped_cauchy_pdf_truncation):
-                wrapped_cauchy_pdf = wrapped_cauchy_pdf + (cauchy_norm_term - (1 + (cauchy_scaled_estimation_deviations + (2 * torch.pi * i) / cauchy_gamma)**2).log()).exp()
-                wrapped_cauchy_pdf = wrapped_cauchy_pdf + (cauchy_norm_term - (1 + (cauchy_scaled_estimation_deviations - (2 * torch.pi * i) / cauchy_gamma)**2).log()).exp()
-                # wrapped_cauchy_pdf = wrapped_cauchy_pdf + cauchy.log_prob(estimation_deviations + (2 * torch.pi * i)).exp()
-                # wrapped_cauchy_pdf = wrapped_cauchy_pdf + cauchy.log_prob(estimation_deviations - (2 * torch.pi * i)).exp()
-            log_prob = wrapped_cauchy_pdf.log()
-
-        elif self.emission_type == 'uniform':
-            in_bump = estimation_deviations.abs() > self.emission_parameter(set_size)
-        
-        Mdims = estimation_deviations.shape[:-1]
-        uniform_component = torch.ones(*Mdims, 1).to(estimation_deviations.device) / (2 * torch.pi)
-        output = torch.concat([uniform_component.log(), log_prob], -1)
-        return output.unsqueeze(0)  # [1, (M...), N + 1]
-
-

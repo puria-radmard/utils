@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch import Tensor as _T
 
-from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.helpers import KernelParameterHolder, LogitsHolder, PiTildeHolder
+from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.helpers import KernelParameterHolder, PiTildeHolder
 
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
 
@@ -20,15 +20,6 @@ class SwapFunctionBase(nn.Module):
 
         if include_pi_u_tilde:
             assert not self.remove_uniform, "Cannot remove uniform (remove_uniform) while specifying a learnable uniform pre-softmax (include_pi_u_tilde)!"
-
-        # if include_pi_u_tilde:
-        #     pi_u_tilde_raw = ((0.10 * torch.randn(1)) + 0.15).to(torch.float64)
-        #     self.register_parameter('pi_u_tilde', nn.Parameter(pi_u_tilde_raw, requires_grad = True))
-        # else:
-        #     self.pi_u_tilde = 0.0
-
-    # def pi_u_tilde_vector(self, I: int, M: int):
-    #     return self.pi_u_tilde * torch.ones([I, M, 1]).to(self.pi_u_tilde.device)
 
     def sample_betas(self, pi_vectors: _T):
         """
@@ -58,6 +49,15 @@ class SwapFunctionBase(nn.Module):
             exp_pi_u_tilde = torch.ones(I, M, 1).to(dtype=dtype, device=device)     # [I, M, 1]
         return exp_pi_u_tilde
 
+    def generate_exp_pi_1_tilde(self, set_size, I: int, M: int, dtype, device):
+        assert self.fix_non_swap
+        if self.include_pi_1_tilde:
+            pi_1_tilde = self.pi_1_tilde_holder[str(set_size)].pi_tilde.to(device) * torch.ones([I, M, 1]).to(dtype=dtype, device=device)
+            exp_pi_1_tilde = pi_1_tilde.exp()
+        else:
+            exp_pi_1_tilde = torch.ones(I, M, 1).to(dtype=dtype, device=device).exp()
+        return exp_pi_1_tilde
+
 
 class NonParametricSwapFunctionBase(SwapFunctionBase):
     """
@@ -73,24 +73,15 @@ class NonParametricSwapFunctionBase(SwapFunctionBase):
 
         if include_pi_u_tilde:
             self.pi_u_tilde_holder = (
-                PiTildeHolder() if kernel_set_sizes is None 
+                PiTildeHolder(0.0) if kernel_set_sizes is None 
                 else nn.ModuleDict({str(N): PiTildeHolder(0.0) for N in kernel_set_sizes})
             )
 
         if include_pi_1_tilde:
             self.pi_1_tilde_holder = (
-                PiTildeHolder() if kernel_set_sizes is None 
+                PiTildeHolder(1.0) if kernel_set_sizes is None 
                 else nn.ModuleDict({str(N): PiTildeHolder(1.0) for N in kernel_set_sizes})
             )
-
-    def generate_exp_pi_1_tilde(self, set_size, I: int, M: int, dtype, device):
-        assert self.fix_non_swap
-        if self.include_pi_1_tilde:
-            pi_1_tilde = self.pi_1_tilde_holder[str(set_size)].pi_tilde.to(device) * torch.ones([I, M, 1]).to(dtype=dtype, device=device)
-            exp_pi_1_tilde = pi_1_tilde.exp()
-        else:
-            exp_pi_1_tilde = torch.ones(I, M, 1).to(dtype=dtype, device=device).exp()
-        return exp_pi_1_tilde
     
     def generate_pi_vectors(self, set_size: int, model_evaulations: _T, return_exp_grid = False):
         """
@@ -129,14 +120,11 @@ class NonParametricSwapFunctionBase(SwapFunctionBase):
             private_noise = sigma * torch.eye(N1).to(data_1.device)
             differences_matrix = rectify_angles(data_1.unsqueeze(1) - data_1)  # [N1,1,D] - [N2,D] -> [N1,N2,D]
 
-            if (D1 == 1):
+            #if (D1 == 1):
                 #import pdb; pdb.set_trace()
                 #x = differences_matrix[...,0].triu().abs()
                 #similar_pairs = torch.logical_and(0.0 < x, x<=GROUPING_THRES).argwhere()    # [(kept item, )]
-                pass
-
-            else:
-                pass
+            #else:
                 #import pdb; pdb.set_trace(header = 'perform grouping!')
 
         else:
@@ -166,7 +154,7 @@ class NonParametricSwapFunctionExpCos(NonParametricSwapFunctionBase):
         inverse_ells: _T = self.kernel_holder[str(set_size)].inverse_ells
         exp_cos_matrix = ((differences_matrix).cos() * inverse_ells).exp()   # [N1,N2,D]
         scaled_exp_cos_matrix = (exp_cos_matrix - (-inverse_ells).exp()) / (inverse_ells.exp() - (-inverse_ells).exp())
-        scaled_exp_cos_matrix_total = scaled_exp_cos_matrix.prod(-1)
+        scaled_exp_cos_matrix_total = scaled_exp_cos_matrix.sum(-1)
         return self.kernel_holder[str(set_size)].scaler * scaled_exp_cos_matrix_total # [N1,N2]
 
 
@@ -175,7 +163,7 @@ class NonParametricSwapFunctionWeiland(NonParametricSwapFunctionExpCos):
 
     def evaluate_kernel_inner(self, set_size: int, differences_matrix: _T):
         inverse_ells = self.kernel_holder[str(set_size)].inverse_ells
-        x = rectify_angles(differences_matrix).abs() 
+        x = rectify_angles(differences_matrix).abs()
         weiland_matrix: _T = (1 + inverse_ells * x / torch.pi) * (1.0 - x / torch.pi).relu().pow(inverse_ells)  # [N1,N2,D]
         return self.kernel_holder[str(set_size)].scaler * weiland_matrix.prod(-1)
 
@@ -183,21 +171,34 @@ class NonParametricSwapFunctionWeiland(NonParametricSwapFunctionExpCos):
 
 class SpikeAndSlabSwapFunction(SwapFunctionBase):
 
-    def __init__(self, logits_set_sizes: list, remove_uniform: bool) -> None:
+    def __init__(self, logits_set_sizes: list, remove_uniform: bool, include_pi_u_tilde: bool, include_pi_1_tilde) -> None:
         
-        self.remove_uniform = remove_uniform
-
         super().__init__(logits_set_sizes, remove_uniform, include_pi_u_tilde = False)
+        assert include_pi_u_tilde or include_pi_1_tilde, "Cannot fix both pi_u_tilde and pi_1_tilde in spike and slab model!"
 
-        self.logit_holder = (
-            LogitsHolder() if logits_set_sizes is None 
-            else nn.ModuleDict({str(N): LogitsHolder(N) for N in logits_set_sizes})
+        self.pi_swap_tilde_holder = (
+            PiTildeHolder(1.0) if logits_set_sizes is None 
+            else nn.ModuleDict({str(N): PiTildeHolder(1.0) for N in logits_set_sizes})
         )
 
+        if include_pi_u_tilde:
+            self.pi_u_tilde_holder = (
+                PiTildeHolder(0.0) if logits_set_sizes is None 
+                else nn.ModuleDict({str(N): PiTildeHolder(0.0) for N in logits_set_sizes})
+            )
+
+        if include_pi_1_tilde:
+            self.pi_1_tilde_holder = (
+                PiTildeHolder(1.0) if logits_set_sizes is None 
+                else nn.ModuleDict({str(N): PiTildeHolder(1.0) for N in logits_set_sizes})
+            )
+
     def generate_pi_vectors(self, set_size: int, batch_size: int, return_exp_grid = False):
-        exp_pi_u_tilde = self.generate_exp_pi_u_tilde(set_size, 1, 1, None, None)
-        component_exp_grid = self.logit_holder[str(set_size)].logit_vector(set_size)    # [1, 1, N]
-        exp_grid = torch.concat([exp_pi_u_tilde.to(component_exp_grid.device), component_exp_grid.exp()], dim=-1)
+        pi_swap_tilde = self.pi_swap_tilde_holder[str(set_size)].pi_tilde
+        exp_pi_swap_tilde = torch.exp(pi_swap_tilde * torch.ones(1, 1, set_size - 1).to(device=pi_swap_tilde.device, dtype=pi_swap_tilde.dtype))
+        exp_pi_u_tilde = self.generate_exp_pi_u_tilde(set_size, 1, 1, device=pi_swap_tilde.device, dtype=pi_swap_tilde.dtype)
+        exp_pi_1_tilde = self.generate_exp_pi_1_tilde(set_size, 1, 1, device=pi_swap_tilde.device, dtype=pi_swap_tilde.dtype)
+        exp_grid = torch.concat([exp_pi_u_tilde, exp_pi_1_tilde, exp_pi_swap_tilde], dim = -1)
         exp_grid = exp_grid.repeat(1, batch_size, 1)    # [1, M, N+1]
         denominator = exp_grid.sum(-1, keepdim=True)    # [1, M, 1]
         pis = exp_grid / denominator

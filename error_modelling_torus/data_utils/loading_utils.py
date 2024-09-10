@@ -46,12 +46,6 @@ def load_experimental_data(dataset_name, train_indices_seed, train_indices_path,
         dataset_generator = Bays2014OrientationEnvelope(M_batch, M_test_per_set_size, subjects = None)
     elif dataset_name == 'gorgoraptis2011_orientation':
         dataset_generator = GorgoraptisOrientationEnvelope(M_batch, M_test_per_set_size, subjects = None)
-
-
-
-
-
-
     else:
         raise ValueError(dataset_name)
 

@@ -22,7 +22,7 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
         if (self.swap_function.function_set_sizes is not None) and (self.error_emissions.emissions_set_sizes is not None):
             assert self.swap_function.function_set_sizes == self.error_emissions.emissions_set_sizes
 
-    def get_marginalised_log_likelihood(self, estimation_deviations: _T, pi_vectors: _T, return_posterior: bool):
+    def get_marginalised_log_likelihood(self, estimation_deviations: _T, pi_vectors: _T):
         """
         This is the first term of the ELBO when training on the estimates
 
@@ -37,24 +37,19 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
             and finally mean over the I dimension
         """
         set_size = estimation_deviations.shape[1]
-        individual_component_log_likelihoods = self.error_emissions.individual_component_log_likelihoods_from_estimate_deviations(
+        individual_component_likelihoods = self.error_emissions.individual_component_likelihoods_from_estimate_deviations(
             set_size, estimation_deviations
-        )
-        pdf_grid = individual_component_log_likelihoods.exp() * pi_vectors  # [I, M, N]
-        total_log_likelihood = pdf_grid.sum(-1).log().sum(-1).mean(0)                         # [I, M, N] -> [I, M] -> [I, M] -> [I] -> scalar
+        )   # [1, M, N+1] - p(y[m] | beta[n], Z[m])
 
-        if return_posterior:
-            with torch.no_grad():
-                posterior_vectors = pdf_grid * pi_vectors           
-                posterior_vectors = posterior_vectors / posterior_vectors.sum(-1, keepdim = True)   # [I, M, N]
-                posterior_vectors = posterior_vectors.mean(0)
+        pdf_grid = individual_component_likelihoods * pi_vectors                  # [I, M, N+1] - p(y[m] | beta[n], Z[m]) * p(beta[n]| Z[m], f[i])
+        total_log_likelihood = pdf_grid.sum(-1).mean(0).log().sum(0)                        # [I, M, N+1] -> [I, M] -> [M] -> [M] -> scalar
 
-        else:
-            posterior_vectors = None
+        posterior_vectors = pdf_grid.sum(0) # [M, N+1]
+        posterior_vectors = posterior_vectors / posterior_vectors.sum(-1, keepdim = True)    # [M, N+1]
 
         return total_log_likelihood, posterior_vectors, pdf_grid
 
-    def get_component_likelihood(self, selected_components: _T, pi_vectors: _T):
+    def get_component_log_likelihood(self, selected_components: _T, pi_vectors: _T):
         """
         This is the first term of the ELBO when training on the selected components/betas (i.e. synthetic data only)
 
@@ -68,47 +63,32 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
         for m in range(M):
             b = selected_components[m]
             selected_pis[:,m] = pi_vectors[:,m,b]
-        return selected_pis.log().sum(-1).mean(0)
+        return selected_pis.mean(0).log().sum()
 
-    def get_categorical_likelihood(self, real_pi_vectors: _T, exp_f_evals: _T):
+    def full_data_generation(self, set_size: int, vm_means: _T, kwargs_for_generate_pi_vectors: dict = {}, kwargs_for_sample_betas: dict = {}, kwargs_for_sample_from_components: dict = {}):
         """
-        This is the first term of the ELBO when training on the pis (i.e. synthetic data only)
-
-        Dirichlet loglikelihood
-
-        real_pi_vectors [M, N] - i.e. from (synthetic) generative model
-        exp_f_evals of shape [I, M, N+1] -
-            exp_f_evals[:,:,0] are e^pi_u_tildes
-            exp_f_evals[:,:,n>0] are e^f evaluations at each point
-        """
-        dirichlets = Dirichlet(concentration = exp_f_evals)
-        log_probs = dirichlets.log_prob(real_pi_vectors)
-        return log_probs.sum(-1).mean(0)
-
-    def full_data_generation(self, set_size: int, vm_means: _T, **kwargs_for_swap_function):
-        """
-        vm_means is basically zeta_col
-        vm_means: [M, N]
+        vm_means is basically zeta_recalled: [M, N]
         """
         with torch.no_grad():
-            pi_vectors, exp_grid = self.swap_function.generate_pi_vectors(set_size=set_size, return_exp_grid=True, **kwargs_for_swap_function)
-            betas = self.swap_function.sample_betas(pi_vectors)
-            samples = self.error_emissions.sample_from_components(set_size, betas, vm_means)
+            pi_vectors, exp_grid = self.swap_function.generate_pi_vectors(set_size=set_size, return_exp_grid=True, **kwargs_for_generate_pi_vectors)
+            betas = self.swap_function.sample_betas(pi_vectors, **kwargs_for_sample_betas)
+            samples = self.error_emissions.sample_from_components(set_size, betas, vm_means, **kwargs_for_sample_from_components)
         return {'exp_grid': exp_grid, 'pi_vectors': pi_vectors, 'betas': betas, 'samples': samples}
 
-    def inference(self, set_size: int, estimation_deviations, **kwargs_for_swap_function):
+    def empirical_residual_distribution_weights(self, posterior_vectors: _T, estimation_deviations: _T):
         """
-        Full generate posteriors from priors and component values
-
-        estimation_deviations ([M, N])  = rectify(estimates - zeta_c)
+        posterior_vectors: [M, N+1] - p(beta[n] | y[m], Z[m])
+        estimation_deviations: [M, N] - rectify(estimates - zeta_c)
         """
+        particle_weights_non_uniform = posterior_vectors[:,1:].detach() # posterior_vectors [M, N]
+        set_size = estimation_deviations.shape[-1]
         with torch.no_grad():
-            pi_vectors = self.swap_function.generate_pi_vectors(set_size=set_size, return_exp_grid=False, **kwargs_for_swap_function)
-            post_hoc_lhs = self.error_emissions.individual_component_log_likelihoods_from_estimate_deviations(set_size, estimation_deviations).exp()
-            posterior_vector = pi_vectors * post_hoc_lhs
-            posterior_vector = posterior_vector / posterior_vector.sum(-1, keepdim = True)
+            error_lhs: _T = self.error_emissions.individual_component_likelihoods_from_estimate_deviations_inner(set_size, estimation_deviations)
+            particle_weights_uniform = (posterior_vectors[:,[0]] * error_lhs)   # [M, N]
         return {
-            'prior': pi_vectors,
-            'likelihood': post_hoc_lhs,
-            'posterior': posterior_vector
+            "particle_weights_non_uniform": particle_weights_non_uniform.detach(),
+            "particle_weights_uniform": particle_weights_uniform.detach(),
+            "particle_weights_total": set_size * (particle_weights_non_uniform + particle_weights_uniform).detach(),
         }
+
+

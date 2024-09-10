@@ -22,8 +22,8 @@ class KernelParameterHolder(HolderBase):
 
         self.num_features = num_features
 
-        log_scaler_raw = (1.0 + torch.relu(5.0 + (2.5 * torch.randn([])))).log().to(torch.float64)
-        log_inverse_ells_raw = (1.0 + torch.relu(20.0 + (2.0 * torch.randn([])))).log().to(torch.float64)
+        log_scaler_raw = (1.0 + torch.relu(2.0 + (0.6 * torch.randn([])))).log().to(torch.float64)
+        log_inverse_ells_raw = (1.0 + torch.relu(5.0 + (1.5 * torch.randn([])))).log().to(torch.float64)
         
         self.register_parameter('log_inverse_ells', nn.Parameter(log_inverse_ells_raw, requires_grad = True))
         self.register_parameter('log_scaler', nn.Parameter(log_scaler_raw, requires_grad = True))
@@ -33,7 +33,8 @@ class KernelParameterHolder(HolderBase):
             self.register_parameter('log_kernel_noise_sigma', nn.Parameter(log_kernel_noise_sigma_raw, requires_grad = True))
             self.minimal_kernel_sigma = 0.00001
         else:
-            self.log_kernel_noise_sigma = (torch.tensor(0.0002)).log().to(torch.float64)
+            self.log_kernel_noise_sigma = (torch.tensor(0.002)).log().to(torch.float64)
+            # self.log_kernel_noise_sigma = -(torch.tensor(float('inf'))).log().to(torch.float64)
             self.minimal_kernel_sigma = 0.0
 
     @property
@@ -50,6 +51,15 @@ class KernelParameterHolder(HolderBase):
 
 
 
+class UniformHalfWidthHolder(HolderBase):
+    def __init__(self):
+        super().__init__()
+        halfwidth_unscaled_raw = (0.25 * torch.randn(1)).to(torch.float64)
+        self.register_parameter('halfwidth_unscaled', nn.Parameter(halfwidth_unscaled_raw, requires_grad = True))
+
+    @property
+    def halfwidth(self):
+        return torch.pi * self.halfwidth_unscaled.sigmoid()
 
 
 class ConcentrationParameterHolder(HolderBase):
@@ -62,34 +72,16 @@ class ConcentrationParameterHolder(HolderBase):
     def concentration(self):
         return self.log_concentration.exp()
 
-
-class CauchyScaleHolder(HolderBase):
-    def __init__(self):
-        super().__init__()
-        log_scale_raw = -1.5 + (0.5 * torch.randn(1)).to(torch.float64)
-        self.register_parameter('log_scale', nn.Parameter(log_scale_raw, requires_grad = True))
-
-    @property
-    def scale(self):
-        return self.log_scale.exp()
-
-
-class UniformHalfWidthHolder(HolderBase):
-    def __init__(self):
-        super().__init__()
-        halfwidth_unscaled_raw = (0.25 * torch.randn(1)).to(torch.float64)
-        self.register_parameter('halfwidth_unscaled', nn.Parameter(halfwidth_unscaled_raw, requires_grad = True))
-
-    @property
-    def halfwidth(self):
-        return torch.pi * self.halfwidth_unscaled.sigmoid()
-
-
-
 class StableAlphaHolder(HolderBase):
     def __init__(self):
         super().__init__()
-        alpha_raw = (0.5 * torch.randn(1)).to(torch.float64)
+
+        init_alpha_upper = torch.tensor(1.99)
+        init_alpha_raw_upper = torch.arctanh(init_alpha_upper - 1.0).item()
+        init_alpha_lower = torch.tensor(0.90)
+        init_alpha_raw_lower = torch.arctanh(init_alpha_lower - 1.0).item()
+
+        alpha_raw = (init_alpha_raw_lower + (init_alpha_raw_upper-init_alpha_raw_lower) * torch.rand(1)).to(torch.float64)
         self.register_parameter('alpha_raw', nn.Parameter(alpha_raw, requires_grad = True))
 
     @property
@@ -107,23 +99,6 @@ class StableGammaHolder(HolderBase):
     @property
     def gamma(self):
         return self.gamma_raw.exp()
-
-
-
-class LogitsHolder(HolderBase):
-    def __init__(self, set_size) -> None:
-        super().__init__()
-        correct_logit_raw = (0.2 + (0.2 * torch.rand([1]))).log().to(torch.float64)
-        swap_logit_raw = (0.2 + (0.2 * torch.rand([1]))).log().to(torch.float64)
-        self.register_parameter('correct_logit', nn.Parameter(correct_logit_raw, requires_grad = True))
-        self.register_parameter('swap_logit', nn.Parameter(swap_logit_raw, requires_grad = True))
-        self.set_size = set_size
-
-    def logit_vector(self, set_size):
-        if self.set_size is not None:
-            assert self.set_size == set_size
-        logit_vector = torch.concat([self.correct_logit] + [self.swap_logit for _ in range(set_size - 1)])
-        return logit_vector.reshape(1, 1, -1)
 
 
 class DeltaTrainHolder(HolderBase):

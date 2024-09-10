@@ -1,12 +1,24 @@
 import numpy as np
 import torch
+from torch import Tensor as _T
+
 from tqdm import tqdm
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
 
-def kurtosis_from_angles(angles, weights):
 
-    if isinstance(weights, torch.Tensor):
-        assert torch.isclose(weights.mean(), torch.tensor(1.0).to(weights.dtype))
+def mean_resultant_length_from_angles(angles: _T, weights: _T):
+    assert torch.isclose(weights.mean(), torch.tensor(1.0).to(weights.dtype))
+    angles, weights = angles.cpu().numpy(), weights.cpu().numpy()
+
+    complex_vectors_1 = np.exp(1j * angles) * weights
+    average_vector_1 = complex_vectors_1.mean()
+    R_bar_1 = np.abs(average_vector_1)
+    return R_bar_1
+
+
+def kurtosis_from_angles(angles: _T, weights: _T):
+    assert torch.isclose(weights.mean(), torch.tensor(1.0).to(weights.dtype))
+    angles, weights = angles.cpu().numpy(), weights.cpu().numpy()
 
     complex_vectors_1 = np.exp(1j * angles) * weights
     complex_vectors_2 = np.exp(2j * angles) * weights
@@ -30,6 +42,11 @@ def wrapped_stable_kurtosis(alpha, gamma):
     numerator = np.exp(-gamma_to_the_alpha * np.power(2.0, alpha)) - np.exp(-4 * gamma_to_the_alpha)
     denominator = np.power(1 - np.exp(-gamma_to_the_alpha), 2.0)
     return numerator / denominator
+
+
+def wrapped_stable_mean_resultant_length(alpha, gamma):
+    gamma_to_the_alpha = np.power(gamma, alpha)
+    return np.exp(-gamma_to_the_alpha)
 
 
 def symmetric_zero_mean_wrapped_stable(theta_axis, alpha, gamma, p_cut_off = 100):
@@ -86,3 +103,61 @@ def fit_symmetric_zero_mean_wrapped_stable_to_samples(alpha_0, gamma_0, samples,
         all_gammas.append(gamma.item())
     
     return all_losses, all_alphas, all_gammas, params.detach()
+
+
+def find_wrapped_stable_parameters_contour_direction(gradient_direction, increasing_alpha):
+    "gradient_direction of shape [batch, 2]"
+    canvas = np.zeros_like(gradient_direction)
+    canvas[:, 0] = 1.0 if increasing_alpha else -1.0
+    canvas[:, 1] = - canvas[:, 0] * gradient_direction[:, 0] / gradient_direction[:, 1]
+    return canvas / np.square(canvas).sum(-1, keepdims=True)
+
+
+def wrapped_stable_mean_resultant_length_grad(alpha, gamma):
+    "assert alpha.shape == gamma.shape and len(alpha.shape) == 1 done upstream!"
+    f = -np.power(gamma, alpha)
+    wrt_alpha = f * np.log(gamma) * np.exp(f)
+    wrt_gamma = alpha * np.exp(f) * f / gamma
+    grads = np.stack([wrt_alpha, wrt_gamma], axis = -1) # 2d now
+    norm_grad = grads / np.square(grads).sum(-1, keepdims=True)
+    return norm_grad
+
+def wrapped_stable_kurtosis_grad(alpha, gamma):
+    "assert alpha.shape == gamma.shape and len(alpha.shape) == 1 done upstream!"
+    f = -np.power(gamma, alpha)
+    exp_f = np.exp(f)
+    f_reflx = 1. - exp_f
+    shared_denominator = np.power(f_reflx, 3.)
+    two_to_the_alpha = np.power(2., alpha)
+    exp_g = np.exp(two_to_the_alpha * f)
+    exp_4f = np.exp(4. * f)
+
+    wrt_alpha_numerator_first_term = f_reflx * f * ((two_to_the_alpha * np.log(2 * gamma) * exp_g) - (4 * np.log(gamma) * exp_4f))
+    wrt_alpha_numerator_second_term = 2. * exp_f * f * np.log(gamma) * (exp_g - exp_4f)
+    
+    wrt_gamma_numerator_first_term = f_reflx * f * ((two_to_the_alpha * exp_g) - (4 * exp_4f)) * alpha / gamma
+    wrt_gamma_numerator_second_term = 2 * exp_f * f * alpha * (exp_g - exp_4f) / gamma
+
+    wrt_alpha = (wrt_alpha_numerator_first_term + wrt_alpha_numerator_second_term) / shared_denominator
+    wrt_gamma = (wrt_gamma_numerator_first_term + wrt_gamma_numerator_second_term) / shared_denominator
+    grads = np.stack([wrt_alpha, wrt_gamma], axis = -1) # 2d now
+    norm_grad = grads / np.square(grads).sum(-1, keepdims=True)
+    return norm_grad
+
+def step_along_mean_resultant_length_contour(alpha, gamma, step_size = 0.0001, increasing_alpha=True):
+    assert alpha.shape == gamma.shape and len(alpha.shape) == 1
+    grad = wrapped_stable_mean_resultant_length_grad(alpha, gamma)
+    contour_direction = find_wrapped_stable_parameters_contour_direction(grad, increasing_alpha)
+    new_alpha = alpha + step_size * contour_direction[:,0]
+    new_gamma = gamma + step_size * contour_direction[:,1]
+    return new_alpha, new_gamma
+
+
+def step_along_kurtosis_contour(alpha, gamma, step_size = 0.0001, increasing_alpha=True):
+    assert alpha.shape == gamma.shape and len(alpha.shape) == 1
+    grad = wrapped_stable_kurtosis_grad(alpha, gamma)
+    contour_direction = find_wrapped_stable_parameters_contour_direction(grad, increasing_alpha)
+    new_alpha = alpha + step_size * contour_direction[:,0]
+    new_gamma = gamma + step_size * contour_direction[:,1]
+    return new_alpha, new_gamma
+
