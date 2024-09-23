@@ -14,7 +14,7 @@ from purias_utils.error_modelling_torus.non_parametric_error_model.variational_a
 
 
 def setup_model_whole(
-    swap_type, kernel_type, emission_type, all_set_sizes, remove_uniform, include_pi_u_tilde, trainable_kernel_delta, R_per_dim, 
+    num_models, swap_type, kernel_type, emission_type, all_set_sizes, remove_uniform, include_pi_u_tilde, trainable_kernel_delta, R_per_dim, 
     fix_non_swap, include_pi_1_tilde, fix_inducing_point_locations, symmetricality_constraint, inducing_point_variational_parameterisation_type, normalisation_inner,
     shared_swap_function, shared_emission_distribution, min_seps: Optional[_T], resume_path: str, device='cuda', **kwargs
     ):
@@ -25,10 +25,10 @@ def setup_model_whole(
     """
 
     if swap_type == 'full':
-        make_variational_model = lambda min_seps: NonParametricSwapErrorsVariationalModel(R_per_dim = R_per_dim, num_features = 2, fix_non_swap = fix_non_swap, fix_inducing_point_locations = fix_inducing_point_locations, symmetricality_constraint = symmetricality_constraint, min_seps = min_seps, inducing_point_variational_parameterisation = inducing_point_variational_parameterisation_type).to(device)
+        make_variational_model = lambda min_seps: NonParametricSwapErrorsVariationalModel(num_models = num_models, R_per_dim = R_per_dim, num_features = 2, fix_non_swap = fix_non_swap, fix_inducing_point_locations = fix_inducing_point_locations, symmetricality_constraint = symmetricality_constraint, min_seps = min_seps, inducing_point_variational_parameterisation = inducing_point_variational_parameterisation_type).to(device)
         D = 2
     elif swap_type in ['cue_dim_only', 'est_dim_only']:
-        make_variational_model = lambda min_seps: NonParametricSwapErrorsVariationalModel(R_per_dim = R_per_dim, num_features = 1, fix_non_swap = fix_non_swap, fix_inducing_point_locations = fix_inducing_point_locations, symmetricality_constraint = symmetricality_constraint, min_seps = min_seps, inducing_point_variational_parameterisation = inducing_point_variational_parameterisation_type).to(device)
+        make_variational_model = lambda min_seps: NonParametricSwapErrorsVariationalModel(num_models = num_models, R_per_dim = R_per_dim, num_features = 1, fix_non_swap = fix_non_swap, fix_inducing_point_locations = fix_inducing_point_locations, symmetricality_constraint = symmetricality_constraint, min_seps = min_seps, inducing_point_variational_parameterisation = inducing_point_variational_parameterisation_type).to(device)
         D = 1   # Only case where it has to be changed
     elif swap_type == 'spike_and_slab':
         make_variational_model = lambda *x: torch.nn.Identity() # No parameters to be saved here!
@@ -41,9 +41,9 @@ def setup_model_whole(
 
     if swap_type == 'spike_and_slab':
         assert kernel_type == 'weiland' # i.e. default
-        make_swap_function = lambda logits_set_sizes: SpikeAndSlabSwapFunction(logits_set_sizes, remove_uniform, include_pi_u_tilde, include_pi_1_tilde, normalisation_inner).to(device)
+        make_swap_function = lambda logits_set_sizes: SpikeAndSlabSwapFunction(num_models = num_models, logits_set_sizes = logits_set_sizes, remove_uniform = remove_uniform, include_pi_u_tilde = include_pi_u_tilde, include_pi_1_tilde = include_pi_1_tilde, normalisation_inner = normalisation_inner).to(device)
     else:   # XXX: different arguments not allowed yet!
-        make_swap_function = lambda kernel_set_sizes: kernel_type_classes[kernel_type](D, kernel_set_sizes, trainable_kernel_delta, remove_uniform, include_pi_u_tilde, fix_non_swap, include_pi_1_tilde, normalisation_inner).to(device)
+        make_swap_function = lambda kernel_set_sizes: kernel_type_classes[kernel_type](num_models = num_models, num_features = D, kernel_set_sizes = kernel_set_sizes, trainable_kernel_delta = trainable_kernel_delta, remove_uniform = remove_uniform, include_pi_u_tilde = include_pi_u_tilde, fix_non_swap = fix_non_swap, include_pi_1_tilde = include_pi_1_tilde, normalisation_inner = normalisation_inner).to(device)
 
     if swap_type == 'cue_dim_only':
         delta_dimensions = [0]    # Only locations
@@ -56,13 +56,12 @@ def setup_model_whole(
         emission_type_classes = {
             "von_mises": VonMisesParametricErrorsEmissions,
             "wrapped_stable": WrappedStableParametricErrorsEmissions,
-            "uniform": UniformParametricErrorsEmissions,
+            # "uniform": UniformParametricErrorsEmissions,
         }
-        make_emissions_model = lambda emissions_set_sizes: emission_type_classes[emission_type](emissions_set_sizes)
-    #    make_emissions_model = lambda emissions_set_sizes: SmoothedWeightedDeltasErrorsEmissions(emissions_set_sizes, args.delta_smoother_kappa, args.initial_distribution_kappa)
+        make_emissions_model = lambda emissions_set_sizes: emission_type_classes[emission_type](num_models, emissions_set_sizes)
 
     make_generative_model = lambda func_ss, ems_ss: NonParametricSwapErrorsGenerativeModel(
-        swap_function=make_swap_function(func_ss), error_emissions=make_emissions_model(ems_ss)
+        num_models, swap_function=make_swap_function(func_ss), error_emissions=make_emissions_model(ems_ss)
     )
 
     variational_model, variational_models = None, None

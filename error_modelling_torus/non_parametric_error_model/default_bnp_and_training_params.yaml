@@ -1,5 +1,6 @@
 run_name: run
 write_to_resume: false
+num_models: 1
 
 beta: nat
 lr: 0.05

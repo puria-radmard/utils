@@ -6,7 +6,6 @@ from math import prod
 from itertools import product
 
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
-from torch.linalg import det
 
 import warnings
 
@@ -38,13 +37,15 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         M = number of trials
         N = number of stimuli in a trial
         R = number of inducing points
+        Q = number of models being trained in parallel
     """
 
-    def __init__(self, R_per_dim: int, num_features: int, fix_non_swap: bool, fix_inducing_point_locations: bool, symmetricality_constraint: bool, min_seps: Optional[_T], inducing_point_variational_parameterisation: str):
+    def __init__(self, num_models: int, R_per_dim: int, num_features: int, fix_non_swap: bool, fix_inducing_point_locations: bool, symmetricality_constraint: bool, min_seps: Optional[_T], inducing_point_variational_parameterisation: str):
 
         super(NonParametricSwapErrorsVariationalModel, self).__init__()
 
-        self.num_features = num_features
+        self.num_models = num_models    # Q
+        self.num_features = num_features    # D
         self.fix_non_swap = fix_non_swap
         self.fix_inducing_point_locations = fix_inducing_point_locations
         self.symmetricality_constraint = symmetricality_constraint
@@ -53,7 +54,7 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         if symmetricality_constraint:   # For inducing points
             self.all_quadrant_mults = []
             for quadrant_mult in list(product([-1.0, 1.0], repeat = self.num_features)):
-                self.all_quadrant_mults.append(torch.tensor(quadrant_mult).unsqueeze(0))
+                self.all_quadrant_mults.append(torch.tensor(quadrant_mult).unsqueeze(0).unsqueeze(0))   # [1, 1, D] to multiply rectify_angles(inducing_points_tilde)
 
         if min_seps is not None:
             assert list(min_seps.shape) == [num_features]
@@ -65,8 +66,8 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
 
         self.min_seps = min_seps
 
-        self.register_parameter('inducing_points_tilde', nn.Parameter(torus_points, requires_grad = not fix_inducing_point_locations))
-        self.register_parameter('m_u_raw', nn.Parameter(torch.zeros(len(self.inducing_points_tilde), dtype = torch.float64), requires_grad = True))
+        self.register_parameter('inducing_points_tilde', nn.Parameter(torus_points.unsqueeze(0).repeat(num_models, 1, 1), requires_grad = not fix_inducing_point_locations))    # [Q, R (unless if symmetric), D]
+        self.register_parameter('m_u_raw', nn.Parameter(torch.zeros(num_models, len(self.inducing_points_tilde), dtype = torch.float64), requires_grad = True))                 # [Q, R (unless if symmetric)]
         
         if inducing_point_variational_parameterisation == 'gaussian':
             
@@ -78,7 +79,7 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             # #     self.register_parameter('S_uu_B', nn.Parameter(torch.zeros(bs, bs, dtype = torch.float64), requires_grad = True))
 
             # # else:
-                self.register_parameter('S_uu_log_chol', nn.Parameter(torch.zeros(self.R, self.R, dtype = torch.float64), requires_grad = True))
+                self.register_parameter('S_uu_log_chol', nn.Parameter(torch.zeros(num_models, self.R, self.R, dtype = torch.float64), requires_grad = True))    # [Q, R (always), R]
 
     @staticmethod
     def generate_points_around_circle_with_min_separation(R_d: int, min_sep: Optional[float], symmetricality_constraint: bool):
@@ -130,32 +131,32 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         return super().to(*args, **kwargs)
 
     @property
-    def Z(self):
+    def Z(self):            # [Q, R, D]
         if self.symmetricality_constraint:
             positive_quadrant = rectify_angles(self.inducing_points_tilde)
-            assert (positive_quadrant >= 0.0).all()
+            assert (positive_quadrant >= 0.0).all()                         # No actual constraint for this, just hoping it works!
             all_quadrants = []
             for quadrant_mult in self.all_quadrant_mults:
                 new_quadrant = positive_quadrant * quadrant_mult.to(positive_quadrant.device)
                 all_quadrants.append(new_quadrant)
-            return torch.concat(all_quadrants)
+            return torch.concat(all_quadrants, 1)
         else:
             return rectify_angles(self.inducing_points_tilde)
 
     @property
-    def m_u(self):
+    def m_u(self):              # [Q, R]
         if self.symmetricality_constraint:
             positive_quadrant = self.m_u_raw
             all_quadrants = []
             for quadrant_mult in self.all_quadrant_mults:
                 new_quadrant = positive_quadrant
                 all_quadrants.append(new_quadrant)
-            return torch.concat(all_quadrants)
+            return torch.concat(all_quadrants, 1)
         else:
             return self.m_u_raw
 
     @property
-    def S_uu(self):
+    def S_uu(self):         # [Q, R, R]
         if self.inducing_point_variational_parameterisation == 'vanilla':
             return 0.0
 
@@ -186,47 +187,85 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         else:
             chol = torch.tril(self.S_uu_log_chol)
             diag_index = range(self.R)
-            chol[diag_index, diag_index] = chol[diag_index, diag_index].exp()
+            chol[diag_index, diag_index] = chol[diag_index, diag_index].exp()           # [Q, R, R]
 
-        S_uu = chol @ chol.T
+        S_uu = torch.bmm(chol, chol.transpose(1, 2))
 
         return S_uu
-
-    def kl_loss(self, K_uu: _T, K_uu_inv: _T) -> _T:
+    
+    @staticmethod
+    def batched_inner_product(M, x):
         """
-            K_uu is the kernel evaluated on the inducing points -> [R, R]
+        x^\intercal M x
+            x of shape [Q, T]
+            M of shape [Q, T, T]
+            output of shape [Q]
+        """
+        return torch.bmm(x.unsqueeze(1), torch.bmm(M, x.unsqueeze(-1))).squeeze(-1).squeeze(-1)
+
+    @staticmethod
+    def batched_inner_product_matrix(M, X):
+        """
+        X^\intercal M X
+            X of shape [Q, T, S]
+            M of shape [Q, T, T]
+            output of shape [Q, S, S]
+        """
+        return torch.bmm(X.transpose(-1, -2), torch.bmm(M, X))
+
+    @staticmethod
+    def batched_inner_product_mix(M, X, x):
+        """
+        X^\intercal M x
+            X of shape [Q, T, S]
+            M of shape [Q, T, T]
+            x of shape [Q, T]
+            output of shape [Q, S]
+        """
+        return torch.bmm(X.transpose(-1, -2), torch.bmm(M, x.unsqueeze(-1))).squeeze(-1)
+
+    def kl_loss(self, K_uu: _T, K_uu_inv: _T) -> _T:    # [Q]
+        """
+            K_uu is the kernel evaluated on the inducing points -> [Q, R, R]
                 We only need to inverse of this!
         """
         if self.inducing_point_variational_parameterisation == 'vanilla':
             warnings.warn('kl loss for self.inducing_point_variational_parameterisation = vanilla not evaluated')
             return torch.tensor(0.0)
-        S_uu = self.S_uu
-        det_S_uu: _T = det(S_uu)
-        det_K_uu: _T = det(K_uu)
-        det_term = (det_K_uu / det_S_uu).log()
-        trace_term = torch.diag(K_uu_inv @ S_uu).sum()
-        mu_term = self.m_u @ (K_uu_inv @ self.m_u)
-        kl_term = 0.5 * (det_term + trace_term + mu_term - self.R)
-        if kl_term.isnan():
+        S_uu = self.S_uu                                                # [Q, R, R]
+        assert K_uu.shape == S_uu.shape == K_uu_inv.shape
+        det_S_uu: _T = torch.linalg.det(S_uu)                           # [Q]
+        det_K_uu: _T = torch.linalg.det(K_uu)                           # [Q]
+        det_term = (det_K_uu / det_S_uu).log()                          # [Q]
+        trace_term = torch.diagonal(torch.bmm(K_uu_inv, S_uu), offset=0, dim1=-1, dim2=-2).sum(-1)  # [Q]
+        mu_term = self.batched_inner_product(K_uu_inv, self.m_u)        # [Q]
+        kl_term = 0.5 * (det_term + trace_term + mu_term - self.R)      # [Q]
+        if kl_term.isnan().any():
             import pdb; pdb.set_trace()
         return kl_term
 
     def variational_gp_inference(self, k_ud: _T, K_dd: _T, K_uu_inv: _T):
         """
-            k_ud is the kernel evaluated on the inducing points against the real data -> [R, MN]
-            K_dd is the kernel evaluated on the real delta data -> [M, M]
-            K_uu is the kernel evaluated on the inducing points -> [R, R]
-                We need to inverse of this!
+            k_ud is the kernel evaluated on the inducing points against the real data -> [Q, R, MN]
+            K_dd is the kernel evaluated on the real delta data -> [Q, MN, MN]
+            K_uu is the kernel evaluated on the inducing points -> [Q, R, R]
+                We need the inverse of this!
 
             Infer GP parameters for q(f)
+
+            sigma: [Q, MN, MN]
+            mu: [Q, MN]
         """
         if self.inducing_point_variational_parameterisation == 'vanilla':
-            sigma = K_dd - (k_ud.T @ K_uu_inv @ k_ud)
+            sigma = K_dd - self.batched_inner_product_matrix(K_uu_inv, k_ud)    # [Q, MN, MN]
         elif self.inducing_point_variational_parameterisation == 'gaussian':
-            sigma = K_dd - (k_ud.T @ K_uu_inv @ k_ud) + (k_ud.T @ K_uu_inv @ self.S_uu @ K_uu_inv @ k_ud)
-        mu = k_ud.T @ (K_uu_inv @ self.m_u)
+            diff_S = self.batched_inner_product_matrix(self.S_uu, K_uu_inv)
+            sigma = K_dd - self.batched_inner_product_matrix(K_uu_inv, k_ud) + self.batched_inner_product_matrix(diff_S, k_ud)  # [Q, MN, MN]
+            import pdb; pdb.set_trace()
+        mu = self.batched_inner_product_mix(k_ud, K_uu_inv, self.m_u)
         try:
-            sigma_chol = torch.linalg.cholesky(sigma + 1e-5 * torch.eye(sigma.shape[0], device = sigma.device, dtype = sigma.dtype))
+            sigma_perturb = torch.eye(sigma.shape[0], device = sigma.device, dtype = sigma.dtype).unsqueeze(0).repeat(self.num_models, 1, 1)
+            sigma_chol = torch.linalg.cholesky(sigma + 1e-5 * sigma_perturb)
         except:
             eigval, eigvec = torch.linalg.eig(sigma)
             eigval[eigval.real < 0.0] = 1e-5
@@ -251,49 +290,60 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         # #     except torch._C._LinAlgError as e2:
         # #         print(e2)
         # #         import pdb; pdb.set_trace()
-        return mu, sigma, sigma_chol   # [MN], [MN, MN], [MN, MN]
+        return mu, sigma, sigma_chol   # [Q, MN], [Q, MN, MN], [Q, MN, MN]
 
     def variational_gp_inference_mean_only(self, k_ud: _T, K_uu_inv: _T):
         """
-            k_ud is the kernel evaluated on the inducing points against the real data -> [R, MN]
-            K_uu is the kernel evaluated on the inducing points -> [R, R]
+            k_ud is the kernel evaluated on the inducing points against the real data -> [Q, R, MN]
+            K_uu is the kernel evaluated on the inducing points -> [Q, R, R]
                 We also need to inverse of this!
 
-            Infer GP parameters for q(f)
+            Infer GP mean parameter for q(f)
+
+            Returns [Q, MN]
         """
-        mu = k_ud.T @ (K_uu_inv @ self.m_u)
+        mu = self.batched_inner_product_mix(k_ud, K_uu_inv, self.m_u)
         return mu
     
     def reparameterised_sample(self, num_samples: int, mu: _T, sigma_chol: _T, M: int, N: int):
-        deduped_MN = mu.shape[0]
-        eps = torch.randn(num_samples, deduped_MN, dtype = mu.dtype, device = mu.device) # [I, dedup size]
-        model_evals = mu.unsqueeze(0) + (eps @ sigma_chol.T) # [I, dedup size]
-        readded_model_evals = self.reinclude_model_evals(model_evals, M, N, num_samples)
+        """
+            mu and sigma_chol come from variational_gp_inference: [Q, MN] and [Q, MN, MN]
+
+            return is of shape [Q, I, M, N]
+        """
+        deduped_MN = mu.shape[1]
+        eps = torch.randn(self.num_models, num_samples, deduped_MN, dtype = mu.dtype, device = mu.device) # [Q, I, MN (dedup size)]
+        model_evals = mu.unsqueeze(1) + torch.bmm(eps, sigma_chol.T)   # [Q, I, MN]
+        readded_model_evals = self.reinclude_model_evals(model_evals, M, N, num_samples)    # [Q, I, M, N]
         return readded_model_evals
 
-    def reinclude_model_evals(self, model_evals: _T, M: int, N: int, I: int):
+    def reinclude_model_evals(self, model_evals: _T, num_displays: int, set_size: int, num_mc_samples: int):
         """
         if self.fix_non_swap:
-            Input in shape [I, 1 + M*(N-1)]
+            Input in shape [Q, I, M*(N-1)]
         else:
-            Input in shape [I, M*(N-1)]
+            Input in shape [Q, I, 1 + M*(N-1)]
+
+        Last shape axis is called "MN" or "dedup size" above
+
+        Returns [Q, I, M, N]
         """
         if self.fix_non_swap:
-            zero_f_eval = -float('inf')*torch.ones(I, M, 1, dtype = model_evals.dtype, device = model_evals.device)   # [I, M, 1]
-            if N > 1:
-                regrouped_model_evals = model_evals.reshape(I, M, N-1)    # [I, M, N-1]
+            zero_f_eval = -float('inf')*torch.ones(self.num_models, num_mc_samples, num_displays, 1, dtype = model_evals.dtype, device = model_evals.device)   # [Q, I, M, 1]
+            if set_size > 1:
+                regrouped_model_evals = model_evals.reshape(self.num_models, num_mc_samples, num_displays, set_size-1)    # [Q, I, M, N-1]
                 readded_model_evals = torch.concat([zero_f_eval, regrouped_model_evals], -1)
-                return readded_model_evals  # [I, M, N]
+                return readded_model_evals  # [Q, I, M, N]
             else:
-                return zero_f_eval
+                return zero_f_eval  # [Q, I, M, N (1)]
         else:
-            zero_f_eval = model_evals[:,[0]].unsqueeze(1).repeat(1, M, 1)   # [I, M, 1]
-            if N > 1:
-                regrouped_model_evals = model_evals[:,1:].reshape(I, M, N-1)    # [I, M, N-1]
+            zero_f_eval = model_evals[...,[0]].unsqueeze(1).repeat(1, num_displays, 1)   # [Q, I, M, 1]
+            if set_size > 1:
+                regrouped_model_evals = model_evals[...,1:].reshape(self.num_models, num_mc_samples, num_displays, set_size-1)    # [Q, I, M, N-1]
                 readded_model_evals = torch.concat([zero_f_eval, regrouped_model_evals], -1)
-                return readded_model_evals  # [I, M, N]
+                return readded_model_evals  # [Q, I, M, N]
             else:
-                return zero_f_eval
+                return zero_f_eval  # [Q, I, M, N (1)]
 
     def deduplicate_deltas(self, deltas: _T, batch_size: int = 0) -> Union[_T, List[_T]]:
         """
@@ -301,25 +351,26 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         If the non-swapped item (i.e. cued item) is included in the swap function, we remove this to ensure a correct kernel calculation downstream
         If not (i.e. self.fix_non_swap = True), then we don't include it in the delta
 
-        Input: [M, N, D]
+        Input: [Q, M, N, D], i.e. have to assume that data unique/repeated for each model
         Output = 
-            1. list containing a single element of size [~MN, D] if batch_size = 0, otherwise a ~M/batch_size length list of entries of shape [~N*batch_size, D]
+            1. list containing a single element of size [Q, ~MN, D] if batch_size = 0, otherwise a ~M/batch_size length list of entries of shape [Q, ~N*batch_size, D]
             2. list containing all the sizes of batches
         """
-        M, N, D = deltas.shape
+        Q, M, N, D = deltas.shape
+        assert Q == self.num_models
         if batch_size < 1:
-            flattened_deltas = deltas.reshape(M * N, D)
+            flattened_deltas = deltas.reshape(Q, M * N, D)
             if self.fix_non_swap:
                 unique_indices = [i for i in range(M * N) if i % N != 0]
             else:
                 unique_indices = [i for i in range(M * N) if i == 0 or i % N != 0]
-            dedup_deltas = [flattened_deltas[unique_indices]]
-            Ms = [M]
+            dedup_deltas = [flattened_deltas[:,unique_indices]] # i.e. index M axis
+            Ms = [M]                  
+            import pdb; pdb.set_trace(header = "do checks on this!")
         else:
             num_batches = (M // batch_size) + (1 if M % batch_size else 0)
-            dedup_deltas_and_Ms = [self.deduplicate_deltas(deltas[j*batch_size:(j+1)*batch_size], 0) for j in range(num_batches)]
+            dedup_deltas_and_Ms = [self.deduplicate_deltas(deltas[:,j*batch_size:(j+1)*batch_size], 0) for j in range(num_batches)]
             dedup_deltas, Ms = zip(*dedup_deltas_and_Ms)
             Ms = [a[0] for a in Ms]
             dedup_deltas = [a[0] for a in dedup_deltas]
         return dedup_deltas, Ms
-        

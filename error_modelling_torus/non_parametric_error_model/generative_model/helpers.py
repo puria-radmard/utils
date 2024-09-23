@@ -6,8 +6,9 @@ from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angl
 
 
 class HolderBase(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, num_models: int) -> None:
         super().__init__()
+        self.num_models = num_models
 
     def __getitem__(self, idx):
         "In case set size is accessed here, see logic below, e.g. NonParametricSwapErrorsGenerativeModel.inverse_ells!"
@@ -16,14 +17,14 @@ class HolderBase(nn.Module):
 
 
 class KernelParameterHolder(HolderBase):
-    def __init__(self, num_features, trainable_kernel_delta):
-        
-        super().__init__()
+    def __init__(self, num_models, num_features, trainable_kernel_delta):
+
+        super().__init__(num_models)
 
         self.num_features = num_features
 
-        log_scaler_raw = (1.0 + torch.relu(2.0 + (0.6 * torch.randn([])))).log().to(torch.float64)
-        log_inverse_ells_raw = (1.0 + torch.relu(5.0 + (1.5 * torch.randn([])))).log().to(torch.float64)
+        log_scaler_raw = (1.0 + torch.relu(2.0 + (0.6 * torch.randn([num_models])))).log().to(torch.float64)
+        log_inverse_ells_raw = (1.0 + torch.relu(5.0 + (1.5 * torch.randn([num_models])))).log().to(torch.float64)
         
         self.register_parameter('log_inverse_ells', nn.Parameter(log_inverse_ells_raw, requires_grad = True))
         self.register_parameter('log_scaler', nn.Parameter(log_scaler_raw, requires_grad = True))
@@ -39,11 +40,11 @@ class KernelParameterHolder(HolderBase):
 
     @property
     def inverse_ells(self):
-        return self.log_inverse_ells.exp().reshape(1, 1, self.num_features)
+        return self.log_inverse_ells.exp().reshape(self.num_models, 1, 1, self.num_features)
 
     @property
     def scaler(self):
-        return self.log_scaler.exp()
+        return self.log_scaler.exp().reshape(self.num_models, 1, 1)
 
     @property
     def kernel_noise_sigma(self):
@@ -52,9 +53,9 @@ class KernelParameterHolder(HolderBase):
 
 
 class UniformHalfWidthHolder(HolderBase):
-    def __init__(self):
-        super().__init__()
-        halfwidth_unscaled_raw = (0.25 * torch.randn(1)).to(torch.float64)
+    def __init__(self, num_models: int):
+        super(num_models).__init__()
+        halfwidth_unscaled_raw = (0.25 * torch.randn(num_models)).to(torch.float64)
         self.register_parameter('halfwidth_unscaled', nn.Parameter(halfwidth_unscaled_raw, requires_grad = True))
 
     @property
@@ -63,37 +64,38 @@ class UniformHalfWidthHolder(HolderBase):
 
 
 class ConcentrationParameterHolder(HolderBase):
-    def __init__(self):
+    def __init__(self, num_models: int):
         super().__init__()
-        log_concentration_raw = (10 + (0.3 * torch.randn(1)).exp()).log().to(torch.float64)
+        log_concentration_raw = (10 + (0.3 * torch.randn(num_models)).exp()).log().to(torch.float64)
         self.register_parameter('log_concentration', nn.Parameter(log_concentration_raw, requires_grad = True))
 
     @property
     def concentration(self):
         return self.log_concentration.exp()
 
+
 class StableAlphaHolder(HolderBase):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, num_models: int):
+        super().__init__(num_models)
 
         init_alpha_upper = torch.tensor(1.99)
         init_alpha_raw_upper = torch.arctanh(init_alpha_upper - 1.0).item()
         init_alpha_lower = torch.tensor(0.90)
         init_alpha_raw_lower = torch.arctanh(init_alpha_lower - 1.0).item()
 
-        alpha_raw = (init_alpha_raw_lower + (init_alpha_raw_upper-init_alpha_raw_lower) * torch.rand(1)).to(torch.float64)
+        alpha_raw = (init_alpha_raw_lower + (init_alpha_raw_upper-init_alpha_raw_lower) * torch.rand(num_models)).to(torch.float64)
         self.register_parameter('alpha_raw', nn.Parameter(alpha_raw, requires_grad = True))
 
     @property
     def alpha(self):
-        return self.alpha_raw.tanh() + 1
+        return self.alpha_raw.tanh() + 1.
 
 
 
 class StableGammaHolder(HolderBase):
-    def __init__(self):
-        super().__init__()
-        gamma_raw = (0.1 + 0.5 * torch.randn(1)).to(torch.float64)
+    def __init__(self, num_models: int):
+        super().__init__(num_models)
+        gamma_raw = (0.1 + 0.5 * torch.randn(num_models)).to(torch.float64)
         self.register_parameter('gamma_raw', nn.Parameter(gamma_raw, requires_grad = True))
 
     @property
@@ -107,6 +109,7 @@ class DeltaTrainHolder(HolderBase):
     from the inference calculations with the generative model
     """
     def __init__(self, initial_distribution_kappa: float, num_initial_locations: int = 500, device = 'cuda') -> None:
+        raise Exception('Needs updating!')
         super().__init__()
         self.delta_locations = (torch.rand(num_initial_locations) * 2 * (torch.pi - 1e-4) - torch.pi).to(device)
         weights = torch.randn_like(self.delta_locations).abs() * (self.delta_locations.cos() * initial_distribution_kappa).exp()
@@ -124,10 +127,7 @@ class DeltaTrainHolder(HolderBase):
 
 
 class PiTildeHolder(HolderBase):
-    def __init__(self, mean_init) -> None:
-        super().__init__()
-        pi_tilde_raw = ((0.20 * torch.randn(1)) + mean_init).to(torch.float64)
+    def __init__(self, mean_init: float, num_models: int) -> None:
+        super().__init__(num_models)
+        pi_tilde_raw = ((0.20 * torch.randn(num_models)) + mean_init).to(torch.float64)
         self.register_parameter('pi_tilde', nn.Parameter(pi_tilde_raw, requires_grad = True))
-    
-    def logit_vector(self):
-        return self.pi_tilde
