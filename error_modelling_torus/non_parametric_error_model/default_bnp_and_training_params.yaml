@@ -1,23 +1,29 @@
-beta: nat
-lr: 0.05
-monte_carlo_gp_samples: 128
-threshold_parameter: 0.95
-reg_weighting: 10.0
-
 run_name: run
 write_to_resume: false
+
+beta: nat
+lr: 0.05
+monte_carlo_gp_samples: 1024
+flip_augmentation: true
 M_batch: 0
+M_batch_mini: 32
+distance_loss_weight: 1.0
+distance_loss_threshold: 0.99
 
 symmetricality_constraint: true
-remove_uniform: false
-include_pi_u_tilde: true
+fix_inducing_point_locations: false
+inducing_point_variational_parameterisation_type: gaussian # gaussian = eq12 or vanilla = eq11, ignored if swap_type == 'spike_and_slab'
+init_min_seps: true
+R_per_dim: 24
+
 swap_type: full
-shared_swap_function: false
-shared_emission_distribution: false
+kernel_type: weiland
 fix_non_swap: true
 include_pi_1_tilde: false
-fix_inducing_point_locations: true
-init_min_seps: true
-R_per_dim: 18
-kernel_type: weiland
-inducing_point_variational_parameterisation_type: gaussian # gaussian = eq12 or vanilla = eq11, ignored if swap_type == 'spike_and_slab'
+remove_uniform: false
+include_pi_u_tilde: true
+normalisation_inner: exp
+
+shared_swap_function: false
+shared_emission_distribution: false
+

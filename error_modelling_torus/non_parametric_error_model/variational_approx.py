@@ -10,7 +10,7 @@ from torch.linalg import det
 
 import warnings
 
-from typing import Optional, List
+from typing import Optional, List, Union
 
 
 class NonParametricSwapErrorsVariationalModel(nn.Module):
@@ -55,8 +55,6 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             for quadrant_mult in list(product([-1.0, 1.0], repeat = self.num_features)):
                 self.all_quadrant_mults.append(torch.tensor(quadrant_mult).unsqueeze(0))
 
-            assert self.fix_inducing_point_locations, 'Not sure how to do this yet!'
-
         if min_seps is not None:
             assert list(min_seps.shape) == [num_features]
             initial_inducing_points_per_axis = [self.generate_points_around_circle_with_min_separation(R_per_dim, ms, symmetricality_constraint) for ms in min_seps]
@@ -67,10 +65,7 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
 
         self.min_seps = min_seps
 
-        if fix_inducing_point_locations:
-            self.inducing_points_tilde = torus_points
-        else:
-            self.register_parameter('inducing_points_tilde', nn.Parameter(torus_points, requires_grad = True))
+        self.register_parameter('inducing_points_tilde', nn.Parameter(torus_points, requires_grad = not fix_inducing_point_locations))
         self.register_parameter('m_u_raw', nn.Parameter(torch.zeros(len(self.inducing_points_tilde), dtype = torch.float64), requires_grad = True))
         
         if inducing_point_variational_parameterisation == 'gaussian':
@@ -138,6 +133,7 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
     def Z(self):
         if self.symmetricality_constraint:
             positive_quadrant = rectify_angles(self.inducing_points_tilde)
+            assert (positive_quadrant >= 0.0).all()
             all_quadrants = []
             for quadrant_mult in self.all_quadrant_mults:
                 new_quadrant = positive_quadrant * quadrant_mult.to(positive_quadrant.device)
@@ -205,12 +201,15 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             warnings.warn('kl loss for self.inducing_point_variational_parameterisation = vanilla not evaluated')
             return torch.tensor(0.0)
         S_uu = self.S_uu
-        det_S_uu = det(S_uu)
-        det_K_uu = det(K_uu)
+        det_S_uu: _T = det(S_uu)
+        det_K_uu: _T = det(K_uu)
         det_term = (det_K_uu / det_S_uu).log()
         trace_term = torch.diag(K_uu_inv @ S_uu).sum()
         mu_term = self.m_u @ (K_uu_inv @ self.m_u)
-        return 0.5 * (det_term + trace_term + mu_term - self.R)
+        kl_term = 0.5 * (det_term + trace_term + mu_term - self.R)
+        if kl_term.isnan():
+            import pdb; pdb.set_trace()
+        return kl_term
 
     def variational_gp_inference(self, k_ud: _T, K_dd: _T, K_uu_inv: _T):
         """
@@ -222,11 +221,18 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             Infer GP parameters for q(f)
         """
         if self.inducing_point_variational_parameterisation == 'vanilla':
-            sigma = K_dd - (k_ud.T @ (K_uu_inv @ k_ud))
+            sigma = K_dd - (k_ud.T @ K_uu_inv @ k_ud)
         elif self.inducing_point_variational_parameterisation == 'gaussian':
             sigma = K_dd - (k_ud.T @ K_uu_inv @ k_ud) + (k_ud.T @ K_uu_inv @ self.S_uu @ K_uu_inv @ k_ud)
         mu = k_ud.T @ (K_uu_inv @ self.m_u)
-        sigma_chol = torch.linalg.cholesky(sigma + 1.0e-1 *torch.eye(sigma.shape[0], device = sigma.device, dtype = sigma.dtype))
+        try:
+            sigma_chol = torch.linalg.cholesky(sigma + 1e-5 * torch.eye(sigma.shape[0], device = sigma.device, dtype = sigma.dtype))
+        except:
+            eigval, eigvec = torch.linalg.eig(sigma)
+            eigval[eigval.real < 0.0] = 1e-5
+            sigma_recon = (eigvec @ torch.diag(eigval) @ eigvec.T)
+            print('Reconstruction error:', (sigma_recon - sigma).abs().max().item())
+            sigma_chol = torch.linalg.cholesky(sigma_recon + 1e-6 * torch.eye(sigma.shape[0], device = sigma.device, dtype = sigma.dtype)).real
         # try:
         #     sigma_chol = torch.linalg.cholesky(sigma)
         # except:
@@ -289,18 +295,31 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             else:
                 return zero_f_eval
 
-    def deduplicate_deltas(self, deltas: _T):
+    def deduplicate_deltas(self, deltas: _T, batch_size: int = 0) -> Union[_T, List[_T]]:
         """
         Every Mth delta will be a 0 by design
         If the non-swapped item (i.e. cued item) is included in the swap function, we remove this to ensure a correct kernel calculation downstream
-        If not (i.e. self.fix_non_swap = True), then we don't include it in the deltas
+        If not (i.e. self.fix_non_swap = True), then we don't include it in the delta
+
+        Input: [M, N, D]
+        Output = 
+            1. list containing a single element of size [~MN, D] if batch_size = 0, otherwise a ~M/batch_size length list of entries of shape [~N*batch_size, D]
+            2. list containing all the sizes of batches
         """
         M, N, D = deltas.shape
-        flattened_deltas = deltas.reshape(M * N, D)
-        if self.fix_non_swap:
-            unique_indices = [i for i in range(M * N) if i % N != 0]
+        if batch_size < 1:
+            flattened_deltas = deltas.reshape(M * N, D)
+            if self.fix_non_swap:
+                unique_indices = [i for i in range(M * N) if i % N != 0]
+            else:
+                unique_indices = [i for i in range(M * N) if i == 0 or i % N != 0]
+            dedup_deltas = [flattened_deltas[unique_indices]]
+            Ms = [M]
         else:
-            unique_indices = [i for i in range(M * N) if i == 0 or i % N != 0]
-        dedup_deltas = flattened_deltas[unique_indices]
-        return dedup_deltas
+            num_batches = (M // batch_size) + (1 if M % batch_size else 0)
+            dedup_deltas_and_Ms = [self.deduplicate_deltas(deltas[j*batch_size:(j+1)*batch_size], 0) for j in range(num_batches)]
+            dedup_deltas, Ms = zip(*dedup_deltas_and_Ms)
+            Ms = [a[0] for a in Ms]
+            dedup_deltas = [a[0] for a in dedup_deltas]
+        return dedup_deltas, Ms
         

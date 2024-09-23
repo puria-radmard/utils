@@ -37,7 +37,7 @@ class ErrorsEmissionsBase(nn.Module):
         reshaped_vm = vm_means.unsqueeze(0).repeat(selected_components.shape[0], 1, 1)
         return sample_set, reshaped_vm
 
-    def sample_from_components(self, set_size: int, selected_components: _T, vm_means: _T):
+    def sample_from_components(self, set_size: int, selected_components: _T, vm_means: _T, **kwargs):
         """
         selected_components of shape [I, M]
         vm_means of shape [M, N] around circle - **NB name is a misnomer, as the emission probability might not be a von Mises**
@@ -50,7 +50,7 @@ class ErrorsEmissionsBase(nn.Module):
                 comp_means = reshaped_vm[n_sel][:,n]
                 if comp_means.numel() > 0:
                     assert sample_set[n_sel].unique().item() == 0.0
-                    samples = self.generate_samples(comp_means, set_size)
+                    samples = self.generate_samples(comp_means, set_size, **kwargs)
                     sample_set[n_sel] = samples
         return sample_set       # [I, M]
 
@@ -62,7 +62,7 @@ class ErrorsEmissionsBase(nn.Module):
             )[0,:,1]
         return theta_axis.cpu().numpy(), likelihood.cpu().numpy()
 
-    def individual_component_likelihoods_from_estimate_deviations(self, set_size: int, estimation_deviations: _T) -> _T:
+    def individual_component_likelihoods_from_estimate_deviations(self, set_size: int, estimation_deviations: _T, **kwargs) -> _T:
         raise NotImplementedError
 
 
@@ -75,7 +75,7 @@ class ParametricErrorsEmissionsBase(ErrorsEmissionsBase):
     def individual_component_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T):
         raise NotImplementedError
 
-    def individual_component_likelihoods_from_estimate_deviations(self, set_size: int, estimation_deviations: _T):
+    def individual_component_likelihoods_from_estimate_deviations(self, set_size: int, estimation_deviations: _T, **kwargs):
         """
         estimation_deviations ([M, N])  = rectify(estimates - zeta_c)
         
@@ -85,7 +85,7 @@ class ParametricErrorsEmissionsBase(ErrorsEmissionsBase):
         However, estimation_deviations can come in any shape [..., N] 
             - this is used for example in NonParametricModelDrivenMultipleOrientationDelayedSingleEstimationTask where there is a batch and a trial axis at the front
         """
-        emission_component_probs = self.individual_component_likelihoods_from_estimate_deviations_inner(set_size, estimation_deviations)
+        emission_component_probs = self.individual_component_likelihoods_from_estimate_deviations_inner(set_size, estimation_deviations, **kwargs)
         Mdims = estimation_deviations.shape[:-1]
         uniform_component_probs = torch.ones(*Mdims, 1).to(estimation_deviations.device) / (2 * torch.pi)
         output = torch.concat([uniform_component_probs, emission_component_probs], -1)
@@ -158,7 +158,7 @@ class WrappedStableParametricErrorsEmissions(ParametricErrorsEmissionsBase):
 
     def individual_component_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T, alpha: Optional[float] = None, gamma: Optional[float] = None):
         "Method taken from Arthur Pewsey, 2008"
-        
+
         if alpha is None:
             alpha = self.alpha_stability_holder[str(set_size)].alpha
         if gamma is None:

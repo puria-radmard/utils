@@ -4,6 +4,8 @@ from torch import nn
 from torch import Tensor as _T
 from torch.distributions import Dirichlet
 
+from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
+
 from typing import Optional, Dict, List
 
 
@@ -22,7 +24,7 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
         if (self.swap_function.function_set_sizes is not None) and (self.error_emissions.emissions_set_sizes is not None):
             assert self.swap_function.function_set_sizes == self.error_emissions.emissions_set_sizes
 
-    def get_marginalised_log_likelihood(self, estimation_deviations: _T, pi_vectors: _T):
+    def get_marginalised_log_likelihood(self, estimation_deviations: _T, pi_vectors: _T, kwargs_for_individual_component_likelihoods: Optional[dict] = None):
         """
         This is the first term of the ELBO when training on the estimates
 
@@ -38,14 +40,18 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
         """
         set_size = estimation_deviations.shape[1]
         individual_component_likelihoods = self.error_emissions.individual_component_likelihoods_from_estimate_deviations(
-            set_size, estimation_deviations
+            set_size, estimation_deviations, **kwargs_for_individual_component_likelihoods
         )   # [1, M, N+1] - p(y[m] | beta[n], Z[m])
+        
+        #import matplotlib.pyplot as plt
+        #plt.scatter(estimation_deviations.flatten().detach().cpu().numpy(), individual_component_likelihoods[0,:,1:].flatten().detach().cpu().numpy())
+        #plt.savefig('individual_component_likelihoods.png')
 
         pdf_grid = individual_component_likelihoods * pi_vectors                  # [I, M, N+1] - p(y[m] | beta[n], Z[m]) * p(beta[n]| Z[m], f[i])
         total_log_likelihood = pdf_grid.sum(-1).mean(0).log().sum(0)                        # [I, M, N+1] -> [I, M] -> [M] -> [M] -> scalar
 
-        posterior_vectors = pdf_grid.sum(0) # [M, N+1]
-        posterior_vectors = posterior_vectors / posterior_vectors.sum(-1, keepdim = True)    # [M, N+1]
+        posterior_vectors = pdf_grid.mean(0) # [M, N+1] - p(y[m], beta[n] | Z[m])
+        posterior_vectors = posterior_vectors / posterior_vectors.sum(-1, keepdim = True)    # [M, N+1] - p(y[m], beta[n] | Z[m]) / p(y[m] | Z[m]) =  p(beta[n] | y[m], Z[m])
 
         return total_log_likelihood, posterior_vectors, pdf_grid
 
@@ -75,20 +81,55 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
             samples = self.error_emissions.sample_from_components(set_size, betas, vm_means, **kwargs_for_sample_from_components)
         return {'exp_grid': exp_grid, 'pi_vectors': pi_vectors, 'betas': betas, 'samples': samples}
 
-    def empirical_residual_distribution_weights(self, posterior_vectors: _T, estimation_deviations: _T):
+    def empirical_residual_distribution_weights(self, posterior_vectors: _T, estimation_deviations: _T, kwargs_for_individual_component_likelihoods: Optional[dict] = {}):
         """
-        posterior_vectors: [M, N+1] - p(beta[n] | y[m], Z[m])
+        posterior_vectors: [M, N+1] - p(beta[n] | y[m], Z[m])       (f samples already factored out)
         estimation_deviations: [M, N] - rectify(estimates - zeta_c)
+
+        Implementation is a little different to what is said in the latex, but generates effectively the same result...
+        
+        XXX -- NB: division by M not done here for some reason... TODO: downstream debug!
         """
         particle_weights_non_uniform = posterior_vectors[:,1:].detach() # posterior_vectors [M, N]
         set_size = estimation_deviations.shape[-1]
         with torch.no_grad():
-            error_lhs: _T = self.error_emissions.individual_component_likelihoods_from_estimate_deviations_inner(set_size, estimation_deviations)
-            particle_weights_uniform = (posterior_vectors[:,[0]] * error_lhs)   # [M, N]
+            if (posterior_vectors[:,[0]] != 0.0).any():
+                
+                dense_grid = torch.linspace(-torch.pi, +torch.pi, 5 * estimation_deviations.numel(), device = estimation_deviations.device)
+                grid_point_distance = dense_grid[1] - dense_grid[0]
+                error_lhs: _T = self.error_emissions.individual_component_likelihoods_from_estimate_deviations_inner(
+                    set_size, dense_grid, **kwargs_for_individual_component_likelihoods
+                )   # [1, 1, many]
+                error_lhs = error_lhs / (grid_point_distance * error_lhs).sum()     # basically 1
+                error_lhs = grid_point_distance * error_lhs
+                
+                dense_grid = dense_grid.unsqueeze(0)
+                reshaped_epsilons = estimation_deviations.reshape(-1, 1)             # [MN, 1] --> reshaped_epsilons.reshape(*estimation_deviations.shape) == estimation_deviations
+                distance_of_grid_points_to_epsilons = rectify_angles(dense_grid - reshaped_epsilons).abs()  # [MN, many]
+                eval_point_assigment_to_epsilon_index = distance_of_grid_points_to_epsilons.argmin(0)       # [many]
+
+                epsilon_assigment = torch.stack([error_lhs[eval_point_assigment_to_epsilon_index==ii].sum() for ii in range(distance_of_grid_points_to_epsilons.shape[0])])       # [MN] XXX: super inefficient!
+
+                particle_weights_uniform_unscaled = epsilon_assigment.reshape(*estimation_deviations.shape) * estimation_deviations.shape[0]
+                particle_weights_uniform = particle_weights_uniform_unscaled * posterior_vectors[:,[0]].detach().mean(0, keepdim=True) 
+                
+                # import matplotlib.pyplot as plt
+                # plt.clf()
+                # plt.scatter(dense_grid.flatten().cpu(), error_lhs.flatten().cpu(), label = 'error_lhs')
+                # plt.scatter(reshaped_epsilons.flatten().cpu(), epsilon_assigment.cpu(), label = 'particle_weights_uniform_unscaled')
+                # plt.legend()
+                # plt.savefig('prior_particles')
+
+            else:
+                particle_weights_uniform = torch.zeros_like(
+                    particle_weights_non_uniform, 
+                    device = particle_weights_non_uniform.device, 
+                    dtype = particle_weights_non_uniform.dtype
+                )
         return {
-            "particle_weights_non_uniform": particle_weights_non_uniform.detach(),
-            "particle_weights_uniform": particle_weights_uniform.detach(),
-            "particle_weights_total": set_size * (particle_weights_non_uniform + particle_weights_uniform).detach(),
+            "particle_weights_non_uniform": particle_weights_non_uniform,
+            "particle_weights_uniform": particle_weights_uniform,
+            "particle_weights_total": set_size * (particle_weights_non_uniform + particle_weights_uniform),
         }
 
 

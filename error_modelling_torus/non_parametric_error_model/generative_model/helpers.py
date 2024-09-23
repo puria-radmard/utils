@@ -33,7 +33,7 @@ class KernelParameterHolder(HolderBase):
             self.register_parameter('log_kernel_noise_sigma', nn.Parameter(log_kernel_noise_sigma_raw, requires_grad = True))
             self.minimal_kernel_sigma = 0.00001
         else:
-            self.log_kernel_noise_sigma = (torch.tensor(0.002)).log().to(torch.float64)
+            self.log_kernel_noise_sigma = (torch.tensor(0.0001)).log().to(torch.float64)
             # self.log_kernel_noise_sigma = -(torch.tensor(float('inf'))).log().to(torch.float64)
             self.minimal_kernel_sigma = 0.0
 

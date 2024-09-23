@@ -22,7 +22,7 @@ def dump_training_indices_to_path(dataset_generator: MultipleSetSizesActivitySet
 
 
 
-def load_experimental_data(dataset_name, train_indices_seed, train_indices_path, M_batch, M_test_per_set_size, data_subselection_args) -> MultipleSetSizesActivitySetDataGeneratorEnvelopeBase:
+def load_experimental_data(dataset_name, train_indices_seed, train_indices_path, M_batch, M_test_per_set_size, data_subselection_args, **kwargs) -> MultipleSetSizesActivitySetDataGeneratorEnvelopeBase:
 
     assert not ((train_indices_seed is not None) and (train_indices_path is not None))
 
