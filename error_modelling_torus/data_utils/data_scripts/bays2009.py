@@ -22,7 +22,7 @@ LOCATION_INCREMENT = sorted(np.unique(np.nan_to_num(NONTARGET_POS_ARRAY)))[1]
 
 class Bayes2009SingleSetSize(EstimateDataLoaderBase):
 
-    def __init__(self, N, M_batch, M_test, participant_id, stimulus_exposure_id, device):
+    def __init__(self, N, M_batch, M_test, num_repeats, participant_id, stimulus_exposure_id, device):
 
         self.device = device
 
@@ -46,13 +46,11 @@ class Bayes2009SingleSetSize(EstimateDataLoaderBase):
         all_errors = rectify_angles(RESPONSE_ARRAY[trial_N_indexer] - zeta_color)
         assert (all_errors[:,[0]] == ERROR_ARRAY[trial_N_indexer]).all()
 
-        M_train_each = deltas.shape[0] - M_test
-        print(M_train_each, 'training examples and', M_test, 'testing examples for N =', self.N)
-        self.__dict__.update(self.sort_out_M_bullshit(M_batch, M_train_each, M_test))
+        all_deltas = torch.tensor(deltas).to(device)                    # [M, N, D (2)]
+        all_target_zetas = torch.tensor(zeta_color).to(device)          # [M, N, ]
+        all_errors = torch.tensor(all_errors).to(device)                # [M, N]
 
-        self.all_deltas = torch.tensor(deltas).to(device)                    # [M, N, D (2)]
-        self.all_target_zetas = torch.tensor(zeta_color).unsqueeze(-1).to(device)                    # [M, N, 1]
-        self.all_errors = torch.tensor(all_errors).to(device)                # [M, N]
+        super().__init__(all_deltas, all_errors, all_target_zetas, M_batch, M_test, num_repeats, device)
 
 
 
@@ -60,12 +58,12 @@ class Bays2009MultipleSetSizesEnvelope(MultipleSetSizesActivitySetDataGeneratorE
 
     D = 2
 
-    def __init__(self, M_batch, M_test, participant_id = None, stimulus_exposure_id = None, device = 'cuda'):
+    def __init__(self, *_, M_batch, M_test, num_repeats, participant_id = None, stimulus_exposure_id = None, device = 'cuda'):
 
         print('No splitting of participants here!')
 
         data_generators = {
-            int(N): Bayes2009SingleSetSize(N, M_batch, M_test, participant_id, stimulus_exposure_id, device)
+            int(N): Bayes2009SingleSetSize(N, M_batch, M_test, num_repeats, participant_id, stimulus_exposure_id, device)
             for N in np.unique(N_ITEMS_ARRAY).astype(float)
         }
 

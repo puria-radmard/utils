@@ -21,10 +21,7 @@ EXPERIMENT_2_COHERENCES = ['lowC', 'medC', 'highC']   # low, medium, high
 
 class McMaster2022SingleSetSize(EstimateDataLoaderBase):
 
-    def __init__(self, data_array, N, experiment_number, M_batch, M_test, subtask, subjects, stimulus_strength_feature, target_dim_key, probe_dim_key, distractor_target_dim_key, device, ori_dim_idx=None, output_oris = False):
-
-        self.N = int(N)
-        self.device = device
+    def __init__(self, data_array, N, experiment_number, M_batch, M_test, num_repeats, subtask, subjects, stimulus_strength_feature, target_dim_key, probe_dim_key, distractor_target_dim_key, device, ori_dim_idx=None, output_oris = False):
 
         subject_structs = data_array[subtask][0]
 
@@ -37,7 +34,7 @@ class McMaster2022SingleSetSize(EstimateDataLoaderBase):
 
             target_item_idx = subject_struct['T_ind'][0,0].reshape(-1) - 1   # [M]
             M = len(target_item_idx)
-            target_idx_mask = np.zeros([M, self.N]).astype(bool)
+            target_idx_mask = np.zeros([M, N]).astype(bool)
             target_idx_mask[list(range(M)), target_item_idx] = True
             distractor_idx_mask = ~target_idx_mask
             
@@ -45,8 +42,8 @@ class McMaster2022SingleSetSize(EstimateDataLoaderBase):
             subject_responses = subject_struct['Resp'][0,0]                                                 # [M, 1]
             zeta_target_cued = subject_struct['full' + target_dim_key][0,0][target_idx_mask, np.newaxis]  # [M, 1]
             zeta_probed_cued = subject_struct[probe_dim_key][0,0][target_idx_mask, np.newaxis]            # [M, 1]
-            zeta_target_distractors = subject_struct['full' + target_dim_key][0,0][distractor_idx_mask].reshape(M, self.N - 1)
-            zeta_probed_distractors = subject_struct[probe_dim_key][0,0][distractor_idx_mask].reshape(M, self.N - 1)
+            zeta_target_distractors = subject_struct['full' + target_dim_key][0,0][distractor_idx_mask].reshape(M, N - 1)
+            zeta_probed_distractors = subject_struct[probe_dim_key][0,0][distractor_idx_mask].reshape(M, N - 1)
 
             # Convert to style we need
             zeta_probed = np.concatenate([zeta_probed_cued, zeta_probed_distractors], 1)
@@ -86,20 +83,18 @@ class McMaster2022SingleSetSize(EstimateDataLoaderBase):
             across_subjects_target_zetas.append(subject_target_zetas)
             across_subjects_errors.append(subject_errors)
 
-        self.all_deltas = torch.concat(across_subjects_deltas, 0)
-        self.all_target_zetas = torch.concat(across_subjects_target_zetas, 0)
-        self.all_errors = torch.concat(across_subjects_errors, 0).squeeze(-1)
+        all_deltas = torch.concat(across_subjects_deltas, 0)
+        all_target_zetas = torch.concat(across_subjects_target_zetas, 0)
+        all_errors = torch.concat(across_subjects_errors, 0).squeeze(-1)
 
         self.subjects = subjects
         self.stimulus_strength_feature = stimulus_strength_feature
 
         if ori_dim_idx is not None:
-            # self.all_deltas[...,ori_dim_idx] = self.all_deltas[...,ori_dim_idx] / 2.
-            self.all_deltas[...,ori_dim_idx] = rectify_angles(self.all_deltas[...,ori_dim_idx] * 2.)
+            # all_deltas[...,ori_dim_idx] = all_deltas[...,ori_dim_idx] / 2.
+            all_deltas[...,ori_dim_idx] = rectify_angles(all_deltas[...,ori_dim_idx] * 2.)
 
-        M_train_each = self.all_deltas.shape[0] - M_test
-        print(M_train_each, 'training examples and', M_test, 'testing examples for N =', self.N)
-        self.__dict__.update(self.sort_out_M_bullshit(M_batch, M_train_each, M_test))
+        super().__init__(all_deltas, all_errors, all_target_zetas, M_batch, M_test, num_repeats, device)
 
 
 
@@ -115,7 +110,7 @@ class McMaster2022ExperimentOneEnvelope(MultipleSetSizesActivitySetDataGenerator
     stim_strengths = None or ['cue_AR1', 'cue_AR2']
     """
 
-    def __init__(self, M_batch, M_test, subtask, subjects = None, stim_strengths = None, device = 'cuda'):
+    def __init__(self, *_, M_batch, M_test, num_repeats: int, subtask, subjects = None, stim_strengths = None, device = 'cuda'):
 
         assert subtask in EXPERIMENT_1_SUBTASKS
         assert (subjects is None) or (set(subjects).intersection(EXPERIMENT_1_SUBJECTS) == set(subjects))
@@ -132,7 +127,7 @@ class McMaster2022ExperimentOneEnvelope(MultipleSetSizesActivitySetDataGenerator
 
         ori_dim_idx = 0 if subtask == 'oricue' else 1
         output_oris = (subtask == 'loccue')
-        data_generators = {6: McMaster2022SingleSetSize(data_array1, 6, 1, M_batch, M_test, subtask, subjects, stim_strengths, target_dim_key, probe_dim_key, distractor_target_dim_key, device, ori_dim_idx, output_oris)}
+        data_generators = {6: McMaster2022SingleSetSize(data_array1, 6, 1, M_batch, M_test, num_repeats, subtask, subjects, stim_strengths, target_dim_key, probe_dim_key, distractor_target_dim_key, device, ori_dim_idx, output_oris)}
 
         if subtask == 'oricue':
             feature_names = ['orientation', 'location']
@@ -158,7 +153,7 @@ class McMaster2022ExperimentTwoEnvelope(MultipleSetSizesActivitySetDataGenerator
     stim_strengths = None
     """
 
-    def __init__(self, M_batch, M_test, subtask, subjects = None, stim_strengths = None, device = 'cuda'):
+    def __init__(self, *_, M_batch, M_test, subtask, num_repeats: int, subjects = None, stim_strengths = None, device = 'cuda'):
 
         assert subtask in EXPERIMENT_2_SUBTASKS
         assert (subjects is None) or (set(subjects).intersection(EXPERIMENT_2_SUBJECTS) == set(subjects))
@@ -174,7 +169,7 @@ class McMaster2022ExperimentTwoEnvelope(MultipleSetSizesActivitySetDataGenerator
             # raise NotImplementedError('Waiting for Jessica\'s response')
             target_dim_key, probe_dim_key, distractor_target_dim_key = 'D', 'L', 'fullD'
 
-        data_generators = {4: McMaster2022SingleSetSize(data_array2, 4, 2, M_batch, M_test, subtask, subjects, stim_strengths, target_dim_key, probe_dim_key, distractor_target_dim_key, device)}
+        data_generators = {4: McMaster2022SingleSetSize(data_array2, 4, 2, M_batch, M_test, num_repeats, subtask, subjects, stim_strengths, target_dim_key, probe_dim_key, distractor_target_dim_key, device)}
 
         if subtask == 'dircue':
             feature_names = ['direction', 'location']
@@ -189,9 +184,9 @@ class McMaster2022ExperimentTwoEnvelope(MultipleSetSizesActivitySetDataGenerator
 
 if __name__ == '__main__':
 
-    dataset_generator = McMaster2022ExperimentOneEnvelope(32, 200, 'loccue', None, None, device = 'cpu')
-    dataset_generator = McMaster2022ExperimentOneEnvelope(32, 200, 'oricue', None, None, device = 'cpu')
+    dataset_generator = McMaster2022ExperimentOneEnvelope(32, 200, 10, 'loccue', None, None, device = 'cpu')
+    dataset_generator = McMaster2022ExperimentOneEnvelope(32, 200, 10, 'oricue', None, None, device = 'cpu')
 
-#    dataset_generator = McMaster2022ExperimentTwoEnvelope(32, 200, 'loccue', None, None, device = 'cpu')
-    dataset_generator = McMaster2022ExperimentTwoEnvelope(32, 200, 'dircue', None, None, device = 'cpu')
+#    dataset_generator = McMaster2022ExperimentTwoEnvelope(32, 200, 10, 'loccue', None, None, device = 'cpu')
+    dataset_generator = McMaster2022ExperimentTwoEnvelope(32, 200, 10, 'dircue', None, None, device = 'cpu')
 

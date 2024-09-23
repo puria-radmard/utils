@@ -1,3 +1,5 @@
+raise Exception('Deprecated/need to update')
+
 import torch
 from torch import pi
 import random

@@ -2,6 +2,8 @@ import torch
 import numpy as np
 from scipy.io import loadmat
 
+from typing import List, Optional
+
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
 from purias_utils.error_modelling_torus.data_utils.base import EstimateDataLoaderBase, MultipleSetSizesActivitySetDataGeneratorEnvelopeBase
 
@@ -16,8 +18,7 @@ class DatasetsUsedInBays2016SingleSetSize(EstimateDataLoaderBase):
     target_zetas come in as [subjects, trials, max setsize]
     """
 
-    def __init__(self, N, errors, delta_cued, deltas_estimated, target_zetas, M_batch, M_test, subjects, device) -> None:
-        super().__init__()
+    def __init__(self, N, errors, delta_cued, deltas_estimated, target_zetas, M_batch, M_test, num_repeats, subjects, device) -> None:
 
         self.N = int(N)
         self.device = device
@@ -37,14 +38,11 @@ class DatasetsUsedInBays2016SingleSetSize(EstimateDataLoaderBase):
         subject_selected_target_zetas = subject_selected_target_zetas[~np.isnan(subject_selected_target_zetas).any(axis = 0)]
         subject_selected_errors = subject_selected_errors[~np.isnan(subject_selected_errors).any(axis = 0)]
 
-        self.all_deltas = torch.tensor(subject_selected_deltas, device = device)    # [M, N, D (2)]
-        self.all_target_zetas = torch.tensor(subject_selected_target_zetas, device = device)    # [M, N]
-        self.all_errors = torch.tensor(subject_selected_errors, device = device)    # [M, N]
+        all_deltas = torch.tensor(subject_selected_deltas, device = device)    # [M, N, D (2)]
+        all_target_zetas = torch.tensor(subject_selected_target_zetas, device = device)    # [M, N]
+        all_errors = torch.tensor(subject_selected_errors, device = device)    # [M, N]
 
-        M_train_each = self.all_deltas.shape[0] - M_test
-        print(M_train_each, 'training examples and', M_test, 'testing examples for N =', self.N)
-        self.__dict__.update(self.sort_out_M_bullshit(M_batch, M_train_each, M_test))
-
+        super().__init__(all_deltas, all_errors, all_target_zetas, M_batch, M_test, num_repeats, device)
 
 
 
@@ -53,7 +51,7 @@ class DatasetsUsedInBays2016Envelope(MultipleSetSizesActivitySetDataGeneratorEnv
     dataset_idx: int
     estimated_feature_name: str
 
-    def __init__(self, M_batch, M_test, subjects = None, device = 'cuda'):
+    def __init__(self, *_,  M_batch: int, M_test: int, num_repeats: int, subjects: Optional[List[int]] = None, device = 'cuda'):
 
         mat = loadmat(data_path)
         dataset_mat = {k: v[0,self.dataset_idx] for k, v in mat.items() if not k.startswith('__')}
@@ -77,13 +75,13 @@ class DatasetsUsedInBays2016Envelope(MultipleSetSizesActivitySetDataGeneratorEnv
         # Actual estimated feature values
         target_zetas = np.concatenate([dataset_mat['target'][...,None], dataset_mat['nontargets']], -1)
 
-        set_sizes = dataset_mat['n_items'].flatten().tolist()
+        set_sizes: List[int] = dataset_mat['n_items'].flatten().tolist()
 
         # Split into data_generators based on set size
-        assert (subjects is None) or (set(subjects).insersection(set(range(len(deltas_estimated)))) == set(subjects))
+        assert (subjects is None) or (set(subjects).intersection(set(range(len(deltas_estimated)))) == set(subjects))
 
         data_generators = {
-            N: DatasetsUsedInBays2016SingleSetSize(N, errors[:,i], delta_cued[:,i], deltas_estimated[:,i], target_zetas[:,i], M_batch, M_test, subjects, device)
+            N: DatasetsUsedInBays2016SingleSetSize(N, errors[:,i], delta_cued[:,i], deltas_estimated[:,i], target_zetas[:,i], M_batch, M_test, num_repeats, subjects, device)
             for i, N in enumerate(set_sizes)
         }
 

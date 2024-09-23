@@ -3,17 +3,41 @@ import numpy as np
 import torch, random
 from torch import Tensor as _T
 
-# from multitask_wm.analysis_scnd.utils import load_activity_sets
-
-from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
-from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model import NonParametricSwapErrorsGenerativeModel
-
 from abc import ABC, abstractmethod
 
+from typing import List, Dict, Type, Optional
 
-class EstimateDataLoaderBase:
 
+class EstimateDataLoaderBase(ABC):
+
+    """
+    self.all_deltas of shape [M, N, D] and duplicated to [Q, M, N, D] upon loading
+    self.all_errors of shape [Q, M, N], which is already duplicated for real data, but makes it possible to swap out for synthetic data
+    self.all_target_zetas of shape [M, N]
+    """
+
+    # All set by self.sort_out_M_bullshit
     set_size_to_M_train_each: dict
+    M_batch: int
+    M_train: int
+    M_test: int
+    num_test_batches: int
+    all_indices: List[int]
+
+    def __init__(self, all_deltas: _T, all_errors: _T, all_target_zetas: _T, M_batch: int, M_test: int, num_repeats: int, device: str) -> None:
+        num_examples, self.set_size, self.features = all_deltas.shape
+        assert tuple(all_errors.shape) == tuple(all_target_zetas.shape) == (num_examples, self.set_size)
+
+        self.all_deltas = all_deltas
+        self.all_target_zetas = all_target_zetas
+        self.all_errors = all_errors.unsqueeze(0).repeat(num_repeats, 1, 1)
+
+        M_train_each = all_deltas.shape[0] - M_test
+        print(M_train_each, 'training examples and', M_test, 'testing examples for N =', self.set_size)
+        self.__dict__.update(self.sort_out_M_bullshit(M_batch, M_train_each, M_test))
+
+        self.num_repeats = num_repeats
+        self.device = device
 
     def new_train_batch(self, *args, **kwargs):
         raise Exception('EstimateDataLoaderBase.new_train_batch deprecated, use iterate_train_batches instead')
@@ -22,51 +46,27 @@ class EstimateDataLoaderBase:
         errors_batch = self.all_errors[batch_indices].to(self.device)
         return deltas_batch, errors_batch
 
-    def iterate_train_batches(self, *_, dimensions, shuffle, total = None, return_indices = False):
+    def iterate_train_batches(self, *_, dimensions, shuffle, total: Optional[int] = None):
+
         if shuffle:
             for t in range(total):
-                if self.M_batch > 0:
-                    batch_indices = random.sample(self.train_indices, self.M_batch)
-                else:
-                    batch_indices = self.train_indices
-                deltas_batch = self.all_deltas[batch_indices].to(self.device)
-                errors_batch = self.all_errors[batch_indices].to(self.device)
-                if return_indices:
-                    yield deltas_batch[...,dimensions], errors_batch, batch_indices
-                else:
-                    yield deltas_batch[...,dimensions], errors_batch
+                batch_indices = random.sample(self.train_indices, self.M_batch) if self.M_batch > 0 else self.train_indices
+                deltas_batch = self.all_deltas[batch_indices].to(self.device).unsqueeze(0).repeat(self.num_repeats, 1, 1, 1)    # [batch, N, D] -> [Q, batch, N, D]
+                errors_batch = self.all_errors[:,batch_indices].to(self.device)                                                 # [batch, N, D]
+                yield self.set_size, len(batch_indices), deltas_batch[...,dimensions], errors_batch, batch_indices
         else:
             assert total == None, 'Cannot define total number of training batches if not shuffling training set'
             for i in range(self.num_train_batches):
-                if self.M_batch > 0:
-                    indices = self.train_indices[i*self.M_batch: (i+1)*self.M_batch]
-                else:
-                    indices = self.train_indices[:]
-                deltas_batch = self.all_deltas[indices].to(self.device)
-                errors_batch = self.all_errors[indices].to(self.device)
-                if return_indices:
-                    yield deltas_batch[...,dimensions], errors_batch, indices
-                else:
-                    yield deltas_batch[...,dimensions], errors_batch
+                batch_indices = self.train_indices[i*self.M_batch: (i+1)*self.M_batch] if self.M_batch > 0 else self.train_indices
+                deltas_batch = self.all_deltas[batch_indices].to(self.device).unsqueeze(0).repeat(self.num_repeats, 1, 1, 1)
+                errors_batch = self.all_errors[:,batch_indices].to(self.device)
+                yield self.set_size, len(batch_indices), deltas_batch[...,dimensions], errors_batch, batch_indices
 
-    def all_test_batches(self, *_, dimensions, return_indices=False):
+    def all_test_batches(self, *_, dimensions):
         for i in range(self.num_test_batches):
-            if self.M_batch > 0:
-                indices = self.test_indices[i*self.M_batch: (i+1)*self.M_batch]
-            else:
-                indices = self.test_indices
-            deltas_batch = self.all_deltas[indices].to(self.device)
-            if return_indices:
-                yield (
-                    deltas_batch[...,dimensions],
-                    self.all_errors[indices].to(self.device),
-                    indices
-                )
-            else:
-                yield (
-                    deltas_batch[...,dimensions],
-                    self.all_errors[indices].to(self.device)
-                )
+            indices = self.test_indices[i*self.M_batch: (i+1)*self.M_batch] if self.M_batch > 0 else self.test_indices
+            deltas_batch = self.all_deltas[indices].to(self.device).unsqueeze(0).repeat(self.num_repeats, 1, 1, 1)
+            yield self.set_size, len(indices), deltas_batch[...,dimensions], self.all_errors[:,indices].to(self.device), indices
 
     @staticmethod
     def sort_out_M_bullshit(M_batch, M_train, M_test):
@@ -76,7 +76,7 @@ class EstimateDataLoaderBase:
         else:
             num_train_batches = 1
             num_test_batches = 1 if M_test > 0 else 0
-        all_indices = range(M_train + M_test)
+        all_indices = list(range(M_train + M_test))
         train_indices = random.sample(all_indices, M_train)
         test_indices = list(set(all_indices) - set(train_indices))
         return {
@@ -120,10 +120,8 @@ class EstimateDataLoaderBase:
                 self.num_train_batches = (self.M_train//self.M_batch) + (1 if (self.M_test + n)%self.M_batch!=0 else 0)
 
 
-class MultipleSetSizesActivitySetDataGeneratorEnvelopeBase(EstimateDataLoaderBase, ABC):
+class MultipleSetSizesActivitySetDataGeneratorEnvelopeBase(ABC):
     """
-    __init__ needs to be preceded by something that set self.data_generators
-
     Contains multiple EstimateDataLoaderBase sub-instances for each set size,
     and during training calls upon each one to generate a random set with a 
         PMF scaled by the number of examples for each set size.
@@ -132,7 +130,7 @@ class MultipleSetSizesActivitySetDataGeneratorEnvelopeBase(EstimateDataLoaderBas
 
     D: int
 
-    def __init__(self, M_batch: int, feature_names: list, data_generators: dict, device: str):
+    def __init__(self, M_batch: int, feature_names: List[str], data_generators: Dict[int, Type[EstimateDataLoaderBase]], device: str):
 
         self.device = device
         self.M_batch = M_batch
@@ -161,9 +159,7 @@ class MultipleSetSizesActivitySetDataGeneratorEnvelopeBase(EstimateDataLoaderBas
         if shuffle:
             for t in range(total):
                 if N==None:
-                    u = random.random()
-                    N_idx = (u >= self.selection_cdf).sum()
-                    iter_N = self.ordered_Ns[N_idx]
+                    iter_N = self.ordered_Ns[(random.random() >= self.selection_cdf).sum()]
                 else:
                     iter_N = N
                 for batch_info in self.data_generators[iter_N].iterate_train_batches(dimensions = dimensions, shuffle = True, total = 1, return_indices = return_indices):
@@ -183,94 +179,6 @@ class MultipleSetSizesActivitySetDataGeneratorEnvelopeBase(EstimateDataLoaderBas
         for dg in self.data_generators.values():
             for ret in dg.all_test_batches(dimensions = dimensions):
                 yield ret
-
-
-class TargetFunctionDataGeneratorBase(EstimateDataLoaderBase, ABC):
-
-    all_deltas: _T
-    all_target_zetas: _T
-
-    def __init__(self, N, torus_dimensionality, target_concentration, underlying_data_generator, output_layer = 'error', device = 'cuda') -> None:
-
-        self.device = device
-        self.output_layer = output_layer
-
-        self.data_generator = NonParametricSwapErrorsGenerativeModel(torus_dimensionality, [N], [N], False, False).to(self.device)
-        self.data_generator.concentration_holder[str(N)].log_concentration.data = torch.tensor(target_concentration).log().to(torch.float64).to(self.device)
-        self.data_generator.concentration_holder[str(N)].log_concentration.requires_grad = False
-        del self.data_generator.kernel_holder
-
-        self.steal_M_bullshit_from_another_generator(underlying_data_generator)
-
-        self.all_deltas = torch.tensor(underlying_data_generator.all_deltas).to(device)                    # [M, N, D (2)]
-        self.all_target_zetas = torch.tensor(underlying_data_generator.all_target_zetas).to(device)                    # [M, N, D (2)]
-
-        test_deltas = self.all_deltas[self.test_indices]
-        test_zeta_t = self.all_target_zetas[self.test_indices]
-        self.test_outputs = self.generate_from_batch(N, test_deltas, test_zeta_t)              # [M, N]
-
-        train_deltas = self.all_deltas[self.train_indices]
-        train_zeta_t = self.all_target_zetas[self.train_indices]
-        self.train_outputs = self.generate_from_batch(N, train_deltas, train_zeta_t)
-
-        self.set_size_to_M_train_each = {self.all_deltas.shape[1]: self.M_train}
-
-    @abstractmethod
-    def target_function(self, deltas: _T):
-        raise NotImplementedError
-
-    def generate_from_batch(self, set_size: int, all_deltas, zeta_t, return_all=False):
-        """
-        all_deltas: [M, N, D]
-        zeta_t:     [M, N, 1]   (i.e. means for simulated samples)
-        """
-        assert (all_deltas[:,0] == 0.0).all(), "Convention requires that first item is always cued"
-        function_evals = self.target_function(all_deltas)
-
-        data_dict = self.data_generator.full_data_generation(
-            set_size,
-            vm_means = zeta_t.squeeze(-1).to(self.device),
-            model_evaulations = function_evals.unsqueeze(0).to(self.device),    # Unsqueeze once for I axis (analogous to 1 monte carlo draw)
-        )
-
-        if return_all:
-            return data_dict, function_evals
-
-        else:
-
-            if self.output_layer == 'error':
-                estimates = data_dict['samples'].squeeze(0).unsqueeze(-1)   # [I (1 for sure), M] -> [M]
-                data = estimates - zeta_t.squeeze(-1).to(self.device)       # [M, N]
-            elif self.output_layer == 'beta':
-                data = data_dict['betas'].squeeze(0)                        # [M]
-            elif self.output_layer == 'pi':
-                data = data_dict['pi_vectors'].squeeze(0)                   # [M, N+1]
-
-            return data
-
-    def new_train_batch(self, *_, dimensions: list):
-        raise Exception('EstimateDataLoaderBase.new_train_batch deprecated, use iterate_train_batches instead')
-        batch_indices = random.sample(self.train_indices, self.M_batch)
-        deltas_batch = self.all_deltas[batch_indices].to(self.device)
-        train_output_indices = [self.train_indices.index(bi) for bi in batch_indices]
-        output_batch = self.train_outputs[train_output_indices].to(self.device)
-        return deltas_batch, output_batch
-
-    def iterate_train_batches(self, *_, dimensions: list, shuffle, total = None, return_indices = False):
-        raise Exception('Have not yet converted new_train_batch to iterate_train_batches for TargetFunctionDataGeneratorBase')
-
-    def all_test_batches(self, *_, dimensions: list):
-        for i in range(self.num_test_batches):
-            if self.M_batch > 0:
-                test_output_slicer = slice(i*self.M_batch, (i+1)*self.M_batch)
-            else:
-                test_output_slicer = slice(None, None)
-            deltas_indices = self.test_indices[test_output_slicer]
-            deltas_batch = self.all_deltas[deltas_indices].to(self.device)
-            yield (
-                deltas_batch[...,dimensions],
-                self.test_outputs[test_output_slicer].to(self.device)
-            )
 
 
 
