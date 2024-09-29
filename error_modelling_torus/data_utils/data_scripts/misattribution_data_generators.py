@@ -40,6 +40,20 @@ class TargetFunctionDataGeneratorBase(EstimateDataLoaderBase, ABC):
 
         self.set_size_to_M_train_each = {self.all_deltas.shape[1]: self.M_train}
 
+    def steal_M_bullshit_from_another_generator(self, other_generator: EstimateDataLoaderBase):
+        # XXX should be updated to account for Q axis in all_indices!
+        self.__dict__.update({
+            'M_train': other_generator.M_train,
+            'M_batch': other_generator.M_batch,
+            'num_train_batches': other_generator.num_train_batches,
+            'M_train': other_generator.M_train,
+            'M_test': other_generator.M_test,
+            'num_test_batches': other_generator.num_test_batches,
+            'all_indices': other_generator.all_indices,
+            'train_indices': other_generator.train_indices,
+            'test_indices': other_generator.test_indices,
+        })
+
     @abstractmethod
     def target_function(self, deltas: _T):
         raise NotImplementedError
@@ -72,14 +86,6 @@ class TargetFunctionDataGeneratorBase(EstimateDataLoaderBase, ABC):
                 data = data_dict['pi_vectors'].squeeze(0)                   # [M, N+1]
 
             return data
-
-    def new_train_batch(self, *_, dimensions: list):
-        raise Exception('EstimateDataLoaderBase.new_train_batch deprecated, use iterate_train_batches instead')
-        batch_indices = random.sample(self.train_indices, self.M_batch)
-        deltas_batch = self.all_deltas[batch_indices].to(self.device)
-        train_output_indices = [self.train_indices.index(bi) for bi in batch_indices]
-        output_batch = self.train_outputs[train_output_indices].to(self.device)
-        return deltas_batch, output_batch
 
     def iterate_train_batches(self, *_, dimensions: list, shuffle, total = None, return_indices = False):
         raise Exception('Have not yet converted new_train_batch to iterate_train_batches for TargetFunctionDataGeneratorBase')

@@ -70,8 +70,3 @@ class Bays2009MultipleSetSizesEnvelope(MultipleSetSizesActivitySetDataGeneratorE
         feature_names = ['location', 'colour']
 
         super().__init__(M_batch, feature_names, data_generators, device)
-
-# dataset_generator = Bays2009MultipleSetSizesEnvelope(32, 200, device = 'cpu')
-# deltas_batch, errors_batch = dataset_generator.new_train_batch()    # [B, N, 2] and [B, N]
-# dataset_generator.selection_cdf
-

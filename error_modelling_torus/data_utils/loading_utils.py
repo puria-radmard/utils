@@ -12,18 +12,14 @@ from purias_utils.error_modelling_torus.data_utils.data_scripts.bays2016_dataset
 #from purias_utils.error_modelling_torus.data_utils.data_scripts.misattribution_data_generators import TargetModulatedSwapMisattributionCheckerSetSizesEnvelope
 
 
-from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
-
 
 dataset_choices = ['bays2009', 'mcmaster2022_e1_oricue', 'mcmaster2022_e2_dircue', 'mcmaster2022_e1_loccue', 'vandenberg2012_color', 'vandenberg2012_orientation', 'bays2014_orientation', 'gorgoraptis2011_orientation']
 
 
 def dump_training_indices_to_path(dataset_generator: MultipleSetSizesActivitySetDataGeneratorEnvelopeBase, dest_base_path):
     import pdb; pdb.set_trace(header = 'Include Q in this!')
-    train_indices = {N: dg.train_indices for N, dg in dataset_generator.data_generators.items()}
-    with open(os.path.join(dest_base_path, 'train_indices.json'), 'w') as jf:
-        json.dump(train_indices, jf)
-
+    train_indices = {N: dg.train_indices.cpu().numpy() for N, dg in dataset_generator.data_generators.items()}
+    np.save(os.path.join(dest_base_path, 'train_indices.npy'), train_indices)
 
 
 def load_experimental_data(dataset_name: str, train_indices_seed: int, train_indices_path: str, M_batch: int, M_test_per_set_size: int, num_repeats: int, data_subselection_args, **kwargs) -> MultipleSetSizesActivitySetDataGeneratorEnvelopeBase:
@@ -35,7 +31,7 @@ def load_experimental_data(dataset_name: str, train_indices_seed: int, train_ind
         random.seed(train_indices_seed)
 
     if dataset_name == 'bays2009':
-        dataset_generator = Bays2009MultipleSetSizesEnvelope(M_batch=M_batch, M_test=M_test_per_set_size, num_repeats=num_repeats, participant_id=data_subselection_args.participant_id, stimulus_exposure_id=data_subselection_args.stimulus_exposure_id)    
+        dataset_generator = Bays2009MultipleSetSizesEnvelope(M_batch=M_batch, M_test=M_test_per_set_size, num_repeats=num_repeats, participant_id=data_subselection_args.participant_id, stimulus_exposure_id=data_subselection_args.stimulus_exposure_id)
     elif dataset_name == 'mcmaster2022_e1_oricue':
         dataset_generator = McMaster2022ExperimentOneEnvelope(M_batch=M_batch, M_test=M_test_per_set_size, num_repeats=num_repeats, subtask='oricue', subjects=data_subselection_args.subjects, stim_strengths=data_subselection_args.stim_strengths)
     elif dataset_name == 'mcmaster2022_e2_dircue':
@@ -57,11 +53,10 @@ def load_experimental_data(dataset_name: str, train_indices_seed: int, train_ind
         random.seed(prev_seed)
 
     if train_indices_path is not None:
-        with open(os.path.join(train_indices_path, f"train_indices.json"), 'r') as jf:
-            train_indices = json.load(jf)
+        train_indices = np.load(os.path.join(train_indices_path, f"train_indices.json"), allow_pickle = True).item()
 
         for N, dg in dataset_generator.data_generators.items():
-            dg.set_train_indices(train_indices[str(N)])
+            dg.set_train_indices(torch.tensor(train_indices[N]))
 
     return dataset_generator
 
