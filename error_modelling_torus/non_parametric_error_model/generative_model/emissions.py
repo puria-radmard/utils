@@ -46,34 +46,31 @@ class ErrorsEmissionsBase(nn.Module):
     @staticmethod
     def fill_in_uniform_samples_and_begin_sampling(selected_components: _T, estimate_means: _T):
         """
-        See sample_from_components for shapes
-        reshaped_estimate_means if shape [Q, I, M, N]
+        selected_components of shape [Q, M], all {0,1,...,N}
         """
         sample_set = torch.zeros_like(selected_components).double()
         unif_sampl = 2 * torch.pi * torch.rand(sample_set[selected_components == 0].shape) - torch.pi
         sample_set[selected_components == 0] = unif_sampl.double().to(selected_components.device)
-        reshaped_estimate_means = estimate_means.unsqueeze(1).repeat(1, selected_components.shape[1], 1, 1)
-        return sample_set, reshaped_estimate_means
+        return sample_set
 
     def sample_from_components(self, set_size: int, selected_components: _T, estimate_means: _T, **kwargs):
         """
-        selected_components of shape [Q, I, M], all {0,1,...,N}
-        estimate_means of shape [Q, M, N] around circle
+        selected_components of shape [Q, M], all {0,1,...,N}
+        estimate_means of shape [M, N] around circle
         """
-        sample_set, reshaped_estimate_means = self.fill_in_uniform_samples_and_begin_sampling(selected_components, estimate_means)
+        sample_set = self.fill_in_uniform_samples_and_begin_sampling(selected_components, estimate_means)   # [Q, M]
 
         with torch.no_grad():
             for n in range(selected_components.max().item()):
-                where_selected = (selected_components == (n+1))                         # Still [Q, I, M]; n+1 because n=0 is uniform - see fill_in_uniform_samples_and_begin_sampling
+                where_selected = (selected_components == (n+1))                         # Still [Q, M]; n+1 because n=0 is uniform - see fill_in_uniform_samples_and_begin_sampling
                 for q in range(self.num_models):
-                    comp_means = reshaped_estimate_means[q][where_selected[q]][:,n]               # [Q, I, M, N] -> [I, M, N] -> [num selected, N] -> [num selected]
+                    comp_means = estimate_means[where_selected[q]][:,n]               # [Q, M, N] -> [M, N] -> [num selected, N] -> [num selected]
                     if comp_means.numel() > 0:
-                        assert sample_set[where_selected].unique().item() == 0.0
+                        assert sample_set[q, where_selected[q]].unique().item() == 0.0
                         samples = self.generate_samples(comp_means, set_size, q, **kwargs)     # [num selected]
-                        import pdb; pdb.set_trace(header = "make this double indexing work!")
-                        sample_set[q, where_selected] = samples                                   # slotted back into samples
-        import pdb; pdb.set_trace(header = "double check all populated!")
-        return sample_set       # [I, M]
+                        sample_set[q, where_selected[q]] = samples                                   # slotted back into samples
+
+        return sample_set       # [M]
 
     def evaluate_emissions_pdf_on_circle(self, set_size: int, num_test_points = 360, device = 'cuda', **llh_kwargs):
         theta_axis = torch.linspace(-torch.pi, torch.pi, num_test_points+1)[:-1].to(device)
@@ -102,8 +99,7 @@ class ParametricErrorsEmissionsBase(ErrorsEmissionsBase):
         """
         estimation_deviations ([Q, M, N])  = rectify(estimates - zeta_c)
         
-        output is of size [Q, 1, M, N+1], where output[:,0] is likelihood of the uniform component (always 1/2pi)
-            Hanging 1st dimenion is there for self.get_marginalised_log_likelihood downstream, i.e. for MC samples (I)...
+        output is of size [Q, M, N+1], the likelihood of the uniform component (always 1/2pi)
 
         However, estimation_deviations can come in any shape [..., N] 
             - this is used for example in NonParametricModelDrivenMultipleOrientationDelayedSingleEstimationTask where there is a batch and a trial axis at the front
@@ -111,7 +107,7 @@ class ParametricErrorsEmissionsBase(ErrorsEmissionsBase):
         emission_component_probs = self.individual_component_likelihoods_from_estimate_deviations_inner(set_size, estimation_deviations, **kwargs)  # typically [Q, M, N]
         uniform_component_probs = torch.ones(*estimation_deviations.shape[:-1], 1).to(estimation_deviations.device) / (2 * torch.pi)                # typically [Q, M, 1]
         output = torch.concat([uniform_component_probs, emission_component_probs], -1)
-        return output.unsqueeze(1)  # [Q, 1, (M...), N + 1]
+        return output  # [Q, (M...), N + 1]
 
 
 
@@ -126,24 +122,24 @@ class VonMisesParametricErrorsEmissions(ParametricErrorsEmissionsBase):
         )
     
     def emission_parameter(self, set_size):
-        return self.concentration_holder[str(set_size)].concentration
+        return self.concentration_holder[str(set_size)].concentration.unsqueeze(-1)
 
     def generate_samples(self, comp_means: _T, set_size: int, model_index: int, **kwargs):
-        return VonMises(loc = comp_means, concentration = self.emission_parameter(set_size)[model_index]).sample()
+        return VonMises(loc = comp_means, concentration = self.emission_parameter(set_size).squeeze(-1)[model_index]).sample()
 
     def individual_component_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T, **kwargs):
-        assert estimation_deviations.shape[-1] == set_size and estimation_deviations.shape[0] == self.num_models
-        von_mises_concentration = self.emission_parameter(set_size)     # [Q]
+        # assert estimation_deviations.shape[-1] == set_size
+        assert estimation_deviations.shape[0] == self.num_models
+        von_mises_concentration = self.emission_parameter(set_size).squeeze(-1)     # [Q]
         von_mises_concentration = von_mises_concentration.reshape(self.num_models, *[1]*(len(estimation_deviations.shape)-1))
         log_prob = (von_mises_concentration * torch.cos(estimation_deviations)) - math.log(2 * math.pi) - _log_modified_bessel_fn(von_mises_concentration, order=0)     # Always zero mean
-        import pdb; pdb.set_trace(header = 'check this!')
         return log_prob.exp()
 
 
 
 class WrappedStableParametricErrorsEmissions(ParametricErrorsEmissionsBase):
 
-    p_cut_off = 100
+    p_cut_off = 200
 
     def __init__(self, num_models: int, emissions_set_sizes: list) -> None:
         super().__init__(num_models, emissions_set_sizes)
@@ -183,7 +179,8 @@ class WrappedStableParametricErrorsEmissions(ParametricErrorsEmissionsBase):
 
     def individual_component_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T, alpha: Optional[float] = None, gamma: Optional[float] = None):
         "Method taken from Arthur Pewsey, 2008"
-        assert estimation_deviations.shape[-1] == set_size and estimation_deviations.shape[0] == self.num_models
+        # assert estimation_deviations.shape[-1] == set_size 
+        assert estimation_deviations.shape[0] == self.num_models
 
         if alpha is None:
             alpha = self.alpha_stability_holder[str(set_size)].alpha    # [Q]
@@ -193,7 +190,7 @@ class WrappedStableParametricErrorsEmissions(ParametricErrorsEmissionsBase):
 
         gamma = gamma.reshape(self.num_models, *[1]*(len(estimation_deviations.shape)-1))    # [Q, 1, ..., 1]
         alpha = alpha.reshape(self.num_models, *[1]*(len(estimation_deviations.shape)-1))    # [Q, 1, ..., 1]
-        gamma_to_the_alpha = torch.pow(gamma, alpha).reshape(self.num_models, *[1]*(len(estimation_deviations)-1))    # [Q, 1, ..., 1]
+        gamma_to_the_alpha = torch.pow(gamma, alpha).reshape(self.num_models, *[1]*(len(estimation_deviations.shape)-1))    # [Q, 1, ..., 1]
         
         result = torch.ones_like(estimation_deviations).to(estimation_deviations.device) / (2 * torch.pi)   # [Q, ..., N]
         rho_p = torch.ones_like(gamma_to_the_alpha).to(estimation_deviations.device) # rho_0    # [Q, 1, ..., 1]
@@ -204,8 +201,11 @@ class WrappedStableParametricErrorsEmissions(ParametricErrorsEmissionsBase):
             rho_p = rho_p * log_r_p_minus_1.exp()   # [Q, 1, ...,1]
             pth_term = (rho_p * (p * estimation_deviations).cos()) / torch.pi   # [Q, ..., N]
             result = result + pth_term
-        
-        import pdb; pdb.set_trace(header = 'check this!')
+
+        # import matplotlib.pyplot as plt
+        # for res, ed in zip(result, estimation_deviations):
+        #     plt.scatter(ed.detach().cpu().numpy(), res.detach().cpu().numpy())
+        # plt.savefig('ws_ed.png')
 
         return result
 

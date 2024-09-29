@@ -13,7 +13,7 @@ class EstimateDataLoaderBase(ABC):
     """
     self.all_deltas of shape [M, N, D] and duplicated to [Q, M, N, D] upon loading
     self.all_errors of shape [Q, M, N], which is already duplicated for real data, but makes it possible to swap out for synthetic data
-    self.all_target_zetas of shape [M, N]
+    self.all_target_zetas of shape [M, N, 1]
     """
 
     # All set by self.sort_out_M_bullshit
@@ -26,7 +26,9 @@ class EstimateDataLoaderBase(ABC):
 
     def __init__(self, all_deltas: _T, all_errors: _T, all_target_zetas: _T, M_batch: int, M_test: int, num_repeats: int, device: str) -> None:
         num_examples, self.set_size, self.features = all_deltas.shape
-        assert tuple(all_errors.shape) == tuple(all_target_zetas.shape) == (num_examples, self.set_size)
+        
+        assert tuple(all_errors.shape) == (num_examples, self.set_size)
+        assert tuple(all_target_zetas.shape) == (num_examples, self.set_size, 1)
 
         self.all_deltas = all_deltas
         self.all_target_zetas = all_target_zetas
@@ -162,16 +164,16 @@ class MultipleSetSizesActivitySetDataGeneratorEnvelopeBase(ABC):
                     iter_N = self.ordered_Ns[(random.random() >= self.selection_cdf).sum()]
                 else:
                     iter_N = N
-                for batch_info in self.data_generators[iter_N].iterate_train_batches(dimensions = dimensions, shuffle = True, total = 1, return_indices = return_indices):
+                for batch_info in self.data_generators[iter_N].iterate_train_batches(dimensions = dimensions, shuffle = True, total = 1):
                     yield batch_info
         else:
             assert total == None, 'Cannot define total number of training batches if not shuffling training set'
             if N == None:
                 for dg in self.data_generators.values():
-                    for ret in dg.iterate_train_batches(shuffle = False, total = None, return_indices = return_indices):
+                    for ret in dg.iterate_train_batches(shuffle = False, total = None):
                         yield ret
             else:
-                for ret in self.data_generators[N].iterate_train_batches(dimensions = dimensions, shuffle = False, total = None, return_indices = return_indices):
+                for ret in self.data_generators[N].iterate_train_batches(dimensions = dimensions, shuffle = False, total = None):
                     yield ret
 
     def all_test_batches(self, *_, dimensions):

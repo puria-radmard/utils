@@ -26,20 +26,20 @@ class DatasetsUsedInBays2016SingleSetSize(EstimateDataLoaderBase):
         if subjects is None:
             subjects = ...
 
-        subject_selected_errors = errors[subjects,:,:N].reshape(-1, N)
+        subject_selected_errors = errors[subjects,:,:N].reshape(-1, N)                  
         subject_selected_delta_cued = delta_cued[subjects,:,:N].reshape(-1, N)
         subject_selected_delta_estimated = deltas_estimated[subjects,:,:N].reshape(-1, N)
         subject_selected_deltas = np.stack([subject_selected_delta_cued.reshape(-1, N), subject_selected_delta_estimated.reshape(-1, N)], -1)
         subject_selected_target_zetas = target_zetas[subjects,:,:N].reshape(-1, N, 1)
 
-        import pdb; pdb.set_trace(header = 'need to remove all nans!')
+        #subject_selected_deltas = subject_selected_deltas[~np.isnan(subject_selected_deltas).any(axis = 1, keepdims=True).repeat(N, 1)]
+        #subject_selected_target_zetas = subject_selected_target_zetas[~np.isnan(subject_selected_target_zetas).any(axis = 0)]
+        #subject_selected_errors = subject_selected_errors[~np.isnan(subject_selected_errors).any(axis = 0)]
 
-        subject_selected_deltas = subject_selected_deltas[~np.isnan(subject_selected_deltas).any(axis = 0)]
-        subject_selected_target_zetas = subject_selected_target_zetas[~np.isnan(subject_selected_target_zetas).any(axis = 0)]
-        subject_selected_errors = subject_selected_errors[~np.isnan(subject_selected_errors).any(axis = 0)]
+        assert not (np.isnan(subject_selected_deltas).any() or np.isnan(subject_selected_target_zetas).any() or np.isnan(subject_selected_errors).any())
 
         all_deltas = torch.tensor(subject_selected_deltas, device = device)    # [M, N, D (2)]
-        all_target_zetas = torch.tensor(subject_selected_target_zetas, device = device)    # [M, N]
+        all_target_zetas = torch.tensor(subject_selected_target_zetas, device = device)    # [M, N, 1]
         all_errors = torch.tensor(subject_selected_errors, device = device)    # [M, N]
 
         super().__init__(all_deltas, all_errors, all_target_zetas, M_batch, M_test, num_repeats, device)
@@ -73,7 +73,12 @@ class DatasetsUsedInBays2016Envelope(MultipleSetSizesActivitySetDataGeneratorEnv
         delta_cued = rectify_angles(location_angles - location_angles[...,[0]])
 
         # Actual estimated feature values
-        target_zetas = np.concatenate([dataset_mat['target'][...,None], dataset_mat['nontargets']], -1)
+        if dataset_mat['target'].size:
+            target_zetas = np.concatenate([dataset_mat['target'][...,None], dataset_mat['nontargets']], -1)
+        else:
+            print('Using deltas as target zetas!')
+            target_zetas = deltas_estimated.copy()
+
 
         set_sizes: List[int] = dataset_mat['n_items'].flatten().tolist()
 
@@ -93,11 +98,13 @@ class DatasetsUsedInBays2016Envelope(MultipleSetSizesActivitySetDataGeneratorEnv
 
 
 class VanDenBerg2012ColourEnvelope(DatasetsUsedInBays2016Envelope):
+    D = 2
     dataset_idx = 2
     estimated_feature_name = 'colour'
     
 
 class VanDenBerg2012OrientationEnvelope(DatasetsUsedInBays2016Envelope):
+    D = 2
     dataset_idx = 3
     estimated_feature_name = 'orientation'
 
@@ -108,6 +115,9 @@ class Bays2014OrientationEnvelope(DatasetsUsedInBays2016Envelope):
     
 
 class GorgoraptisOrientationEnvelope(DatasetsUsedInBays2016Envelope):
+    D = 3
     dataset_idx = 9
     estimated_feature_name = 'orientation'
+    def __init__(self, ):
+        raise Exception('Colour and/or location not accounted for!')
     

@@ -1,6 +1,6 @@
 import os, sys, json, random, torch, numpy as np
 
-from typing import Type
+from typing import Type, Optional, List
 
 from purias_utils.error_modelling_torus.data_utils.base import MultipleSetSizesActivitySetDataGeneratorEnvelopeBase
 from purias_utils.error_modelling_torus.data_utils.data_scripts.bays2009 import Bays2009MultipleSetSizesEnvelope
@@ -8,8 +8,8 @@ from purias_utils.error_modelling_torus.data_utils.data_scripts.mcmaster2022 imp
 from purias_utils.error_modelling_torus.data_utils.data_scripts.bays2016_datasets import VanDenBerg2012ColourEnvelope, VanDenBerg2012OrientationEnvelope, Bays2014OrientationEnvelope, GorgoraptisOrientationEnvelope
 
 
-from purias_utils.error_modelling_torus.data_utils.data_scripts.misattribution_data_generators import ZeroSwapMisattributionCheckerSetSizesEnvelope
-from purias_utils.error_modelling_torus.data_utils.data_scripts.misattribution_data_generators import TargetModulatedSwapMisattributionCheckerSetSizesEnvelope
+#from purias_utils.error_modelling_torus.data_utils.data_scripts.misattribution_data_generators import ZeroSwapMisattributionCheckerSetSizesEnvelope
+#from purias_utils.error_modelling_torus.data_utils.data_scripts.misattribution_data_generators import TargetModulatedSwapMisattributionCheckerSetSizesEnvelope
 
 
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
@@ -19,6 +19,7 @@ dataset_choices = ['bays2009', 'mcmaster2022_e1_oricue', 'mcmaster2022_e2_dircue
 
 
 def dump_training_indices_to_path(dataset_generator: MultipleSetSizesActivitySetDataGeneratorEnvelopeBase, dest_base_path):
+    import pdb; pdb.set_trace(header = 'Include Q in this!')
     train_indices = {N: dg.train_indices for N, dg in dataset_generator.data_generators.items()}
     with open(os.path.join(dest_base_path, 'train_indices.json'), 'w') as jf:
         json.dump(train_indices, jf)
@@ -74,16 +75,15 @@ def load_synthetic_data(dataset_generator: Type[MultipleSetSizesActivitySetDataG
     data = np.load(data_path, allow_pickle=True).item()
 
     for N, dg in dataset_generator.data_generators.items():
-        import pdb; pdb.set_trace(header = 'check shapes are the same here!')
 
-        synthetic_errors = torch.tensor(data['errors'][N]).to(dtype = dg.all_errors.dtype, device = dg.all_errors.device)
+        synthetic_errors = torch.tensor(data['generated_data']['errors'][N]).to(dtype = dg.all_errors.dtype, device = dg.all_errors.device)
 
-        import pdb; pdb.set_trace(header = 'make some args up here perhaps for ensuring this...')
-        assert dg.all_errors.shape == synthetic_errors.shape        # [Q, M, N], i.e. includes num_repeats!
+        assert dg.all_errors.shape == synthetic_errors.shape        # [Q, M, N], i.e. num models included here, see for example function_augmentation.py in the other repo!!
 
         dg.all_errors = synthetic_errors
 
-    true_surfaces = data['function_eval']
+    true_surfaces = data['generated_data']['function_eval_mean']
+    true_surfaces_std = data['generated_data'].get('function_eval_std', {k: None for k in true_surfaces.keys()})
 
-    return dataset_generator, true_surfaces
+    return dataset_generator, true_surfaces, true_surfaces_std
 

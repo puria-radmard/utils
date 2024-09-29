@@ -57,16 +57,16 @@ class SwapFunctionBase(nn.Module):
 
     def sample_betas(self, pi_vectors: _T):
         """
-            pi_vectors of shape [Q, I, M, N+1]
-            output [Q, I, M]
+            pi_vectors of shape [Q, M, N+1]
+            output [Q, M]
         """
         assert pi_vectors.shape[0] == self.num_models
-        prob_cum = pi_vectors.cumsum(-1)
-        u = torch.rand(*prob_cum.shape[:2], 1).to(pi_vectors.device)
-        selected_components = (u > prob_cum).sum(-1)
-        return selected_components                              # [Q, I, M]
+        prob_cum = pi_vectors.cumsum(-1)    # [Q, M, N+1]
+        u = torch.rand(*prob_cum.shape[:2], 1).to(pi_vectors.device)     # [Q, M, 1]
+        selected_components = (u > prob_cum).sum(-1)                    # [Q, M, N+1] -> [Q, M]
+        return selected_components                              # [Q, M]
 
-    def generate_pi_vectors(self, set_size: int, return_exp_grid: bool):    # [Q, I, M, N+1]
+    def generate_pi_vectors(self, set_size: int):    # [Q, M, N+1]
         raise NotImplementedError
 
     def evaluate_kernel(self, set_size: int, data_1: _T, data_2: _T = None):
@@ -80,7 +80,7 @@ class SwapFunctionBase(nn.Module):
         if self.remove_uniform:
             exp_pi_u_tilde = torch.zeros(Q, I, M, 1).to(dtype=dtype, device=device)
         elif self.include_pi_u_tilde:
-            pi_u_tilde = self.pi_u_tilde_holder[str(set_size)].pi_tilde.to(device).reshape(-1, 1, 1, 1).repeat(Q, I, M, 1)
+            pi_u_tilde = self.pi_u_tilde_holder[str(set_size)].pi_tilde.to(device).reshape(-1, 1, 1, 1).repeat(1, I, M, 1)
             exp_pi_u_tilde = self.normalisation_inner(pi_u_tilde)
         else:
             exp_pi_u_tilde = self.normalisation_inner(torch.zeros(Q, I, M, 1).to(dtype=dtype, device=device))
@@ -90,7 +90,7 @@ class SwapFunctionBase(nn.Module):
         assert self.fix_non_swap
         Q = self.num_models
         if self.include_pi_1_tilde:
-            pi_1_tilde = self.pi_1_tilde_holder[str(set_size)].pi_tilde.to(device).reshape(-1, 1, 1, 1).repeat(Q, I, M, 1)
+            pi_1_tilde = self.pi_1_tilde_holder[str(set_size)].pi_tilde.to(device).reshape(-1, 1, 1, 1).repeat(1, I, M, 1)
             exp_pi_1_tilde = self.normalisation_inner(pi_1_tilde)
         else:
             exp_pi_1_tilde = self.normalisation_inner(torch.ones(Q, I, M, 1).to(dtype=dtype, device=device))
@@ -121,11 +121,11 @@ class NonParametricSwapFunctionBase(SwapFunctionBase):
                 else nn.ModuleDict({str(N): PiTildeHolder(2.0, num_models) for N in kernel_set_sizes})
             )
     
-    def generate_pi_vectors(self, set_size: int, model_evaulations: _T, return_exp_grid = False, make_spike_and_slab = False):
+    def generate_pi_vectors(self, set_size: int, model_evaulations: _T, make_spike_and_slab = False):
         """
         model_evaulations: (samples of) f, shaped [Q, I, M, N] --  see NonParametricSwapErrorsVariationalModel.reparameterised_sample
 
-        output of shape [Q, I, M, N+1], where output[q,i,m,0] is the relevant pi_u probability for qth model being trained
+        output of shape [Q, M, N+1], where output[q,m,0] is the relevant pi_u probability for qth model being trained
         """
         Q, I, M, N = model_evaulations.shape
         exp_pi_u_tilde = self.generate_exp_pi_u_tilde(set_size, I, M, model_evaulations.dtype, model_evaulations.device)    # [Q, I, M, 1]
@@ -141,7 +141,8 @@ class NonParametricSwapFunctionBase(SwapFunctionBase):
             pis[...,2:] = pis[...,2:].mean(keepdim=True)    # Replace [Q, I, 1, N-1]
             pis = pis.repeat(1, 1, M, 1)
             exp_grid = None # Not determined here...
-        return (pis, exp_grid) if return_exp_grid else pis
+        pis = pis.mean(1)   # Average over MC draws
+        return {'pis': pis, 'exp_grid': exp_grid}
 
     def evaluate_kernel(self, set_size: int, data_1: _T, data_2: _T = None):
         """
@@ -180,8 +181,8 @@ class NonParametricSwapFunctionExpCos(NonParametricSwapFunctionBase):
         super().__init__(num_models, num_features, kernel_set_sizes, remove_uniform, include_pi_u_tilde, fix_non_swap, include_pi_1_tilde, normalisation_inner)
 
         self.kernel_holder = (
-            KernelParameterHolder(self.num_features, trainable_kernel_delta) if kernel_set_sizes is None 
-            else nn.ModuleDict({str(N): KernelParameterHolder(self.num_features, trainable_kernel_delta) for N in kernel_set_sizes})
+            KernelParameterHolder(num_models, self.num_features, trainable_kernel_delta) if kernel_set_sizes is None 
+            else nn.ModuleDict({str(N): KernelParameterHolder(num_models, self.num_features, trainable_kernel_delta) for N in kernel_set_sizes})
         )
 
     def evaluate_kernel_inner(self, set_size: int, differences_matrix: _T):
@@ -210,15 +211,15 @@ class SpikeAndSlabSwapFunction(SwapFunctionBase):
     def __init__(self, num_models: int, logits_set_sizes: list, remove_uniform: bool, include_pi_u_tilde: bool, include_pi_1_tilde: bool, normalisation_inner: str) -> None:
         
         super().__init__(num_models, logits_set_sizes, remove_uniform, include_pi_u_tilde = False, normalisation_inner = normalisation_inner)
-        assert include_pi_u_tilde or include_pi_1_tilde, "Cannot fix both pi_u_tilde and pi_1_tilde in spike and slab model!"
+        if not remove_uniform:
+            assert include_pi_u_tilde or include_pi_1_tilde, "Cannot fix both pi_u_tilde and pi_1_tilde in spike and slab model!"
 
-        # of course
-        self.fix_non_swap = True
-        self.include_pi_1_tilde = True
+        self.fix_non_swap = True    # of course
+        self.include_pi_1_tilde = include_pi_1_tilde
 
         self.pi_swap_tilde_holder = (
-            PiTildeHolder(2.0, num_models) if logits_set_sizes is None 
-            else nn.ModuleDict({str(N): PiTildeHolder(2.0, num_models) for N in logits_set_sizes})
+            PiTildeHolder(1.0, num_models) if logits_set_sizes is None 
+            else nn.ModuleDict({str(N): PiTildeHolder(1.0, num_models) for N in logits_set_sizes})
         )
 
         if include_pi_u_tilde:
@@ -233,24 +234,21 @@ class SpikeAndSlabSwapFunction(SwapFunctionBase):
                 else nn.ModuleDict({str(N): PiTildeHolder(2.0, num_models) for N in logits_set_sizes})
             )
 
-    def generate_exp_pi__tilde(self, set_size, I: int, M: int, dtype, device): # [Q, I, M, N-1]
-        Q = self.num_models
-        pi_swap_tilde = self.pi_swap_tilde_holder[str(set_size)].pi_tilde.to(device).reshape(-1, 1, 1, 1).repeat(Q, I, M, set_size - 1)
+    def generate_exp_pi_swap_tilde(self, set_size, I: int, M: int, dtype, device): # [Q, I, M, N-1]
+        pi_swap_tilde = self.pi_swap_tilde_holder[str(set_size)].pi_tilde.reshape(-1, 1, 1, 1).repeat(1, I, M, set_size - 1)
         exp_pi_swap_tilde = self.normalisation_inner(pi_swap_tilde)
-        return exp_pi_swap_tilde
+        return exp_pi_swap_tilde.to(device=device, dtype=dtype)
 
-    def generate_pi_vectors(self, set_size: int, batch_size: int, return_exp_grid = False):
+    def generate_pi_vectors(self, set_size: int, batch_size: int):
         """
-        Output is of shape [Q, I = 1, M, N+1], where output[q,0,:,n] is the same for all data
+        Output is of shape [Q, M, N+1], where output[q,0,:,n] is the same for all data
         """
+        exp_pi_swap_tilde = self.generate_exp_pi_swap_tilde(set_size, 1, 1, device=None, dtype=None)   # [Q, 1, M, N-1]
         exp_pi_u_tilde = self.generate_exp_pi_u_tilde(set_size, 1, 1, device=exp_pi_swap_tilde.device, dtype=exp_pi_swap_tilde.dtype)   # [Q, 1, M, 1]
         exp_pi_1_tilde = self.generate_exp_pi_1_tilde(set_size, 1, 1, device=exp_pi_swap_tilde.device, dtype=exp_pi_swap_tilde.dtype)   # [Q, 1, M, 1]
-        exp_pi_swap_tilde = self.generate_exp_pi_u_tilde(set_size, 1, 1, device=None, dtype=None)   # [Q, 1, M, N-1]
 
-
-        exp_grid = torch.concat([exp_pi_u_tilde, exp_pi_1_tilde, exp_pi_swap_tilde], dim = -1)  # [Q, 1, M, N+1]
-        exp_grid = exp_grid.repeat(1, 1, batch_size, 1)                                         # [Q, 1, M, N+1]
-        denominator = exp_grid.sum(-1, keepdim=True)                                            # [Q, 1, M, 1]
+        exp_grid = torch.concat([exp_pi_u_tilde, exp_pi_1_tilde, exp_pi_swap_tilde], dim = -1).squeeze(1)  # [Q, 1, 1, N+1] -> [Q, 1, N+1]
+        exp_grid = exp_grid.repeat(1, batch_size, 1)                                         # [Q, M, N+1]
+        denominator = exp_grid.sum(-1, keepdim=True)                                            # [Q, M, 1]
         pis = exp_grid / denominator
-        import pdb; pdb.set_trace(header = 'check same across same q and swap ns')
-        return (pis, exp_grid) if return_exp_grid else pis
+        return {'pis': pis, 'exp_grid': exp_grid}

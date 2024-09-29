@@ -54,7 +54,7 @@ class KernelParameterHolder(HolderBase):
 
 class UniformHalfWidthHolder(HolderBase):
     def __init__(self, num_models: int):
-        super(num_models).__init__()
+        super().__init__(num_models)
         halfwidth_unscaled_raw = (0.25 * torch.randn(num_models)).to(torch.float64)
         self.register_parameter('halfwidth_unscaled', nn.Parameter(halfwidth_unscaled_raw, requires_grad = True))
 
@@ -65,7 +65,7 @@ class UniformHalfWidthHolder(HolderBase):
 
 class ConcentrationParameterHolder(HolderBase):
     def __init__(self, num_models: int):
-        super().__init__()
+        super().__init__(num_models)
         log_concentration_raw = (10 + (0.3 * torch.randn(num_models)).exp()).log().to(torch.float64)
         self.register_parameter('log_concentration', nn.Parameter(log_concentration_raw, requires_grad = True))
 
@@ -95,7 +95,7 @@ class StableAlphaHolder(HolderBase):
 class StableGammaHolder(HolderBase):
     def __init__(self, num_models: int):
         super().__init__(num_models)
-        gamma_raw = (0.1 + 0.5 * torch.randn(num_models)).to(torch.float64)
+        gamma_raw = (0.5 * torch.randn(num_models)).to(torch.float64)
         self.register_parameter('gamma_raw', nn.Parameter(gamma_raw, requires_grad = True))
 
     @property

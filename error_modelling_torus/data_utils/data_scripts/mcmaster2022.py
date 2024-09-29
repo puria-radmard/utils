@@ -114,7 +114,7 @@ class McMaster2022ExperimentOneEnvelope(MultipleSetSizesActivitySetDataGenerator
 
         assert subtask in EXPERIMENT_1_SUBTASKS
         assert (subjects is None) or (set(subjects).intersection(EXPERIMENT_1_SUBJECTS) == set(subjects))
-        assert (stim_strengths is None) or (set(stim_strengths).intersection(EXPERIMENT_1_ELONGATIONS) == set(stim_strengths))
+        assert (stim_strengths is None) or (set(stim_strengths).intersection(EXPERIMENT_1_ELONGATIONS) == set(stim_strengths)), stim_strengths
         if (subjects is None):
             subjects = EXPERIMENT_1_SUBJECTS
         if (stim_strengths is None):
