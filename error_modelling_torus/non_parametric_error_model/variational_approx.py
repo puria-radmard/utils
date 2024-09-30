@@ -8,8 +8,6 @@ import matplotlib.pyplot as plt
 
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
 
-from purias_utils.util.plotting import standard_swap_model_simplex_plots, legend_without_repeats, lighten_color
-
 import warnings
 
 from numpy import ndarray as _A
@@ -377,100 +375,3 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             Ms = [a[0] for a in Ms]
             dedup_deltas = [a[0] for a in dedup_deltas]
         return dedup_deltas, Ms
-
-
-
-
-
-        std_est = flat_sigma_est.diag().sqrt().cpu()
-        flat_mu_est_numpy = flat_mu_est.cpu()
-
-        upper_error_surface = (flat_mu_est_numpy + (2*std_est)).reshape(grid_x.shape)
-        lower_error_surface = (flat_mu_est_numpy - (2*std_est)).reshape(grid_x.shape)
-        surface = flat_mu_est_numpy.reshape(grid_x.shape)
-        
-        return flat_mu_est, flat_mu_est_numpy, upper_error_surface, lower_error_surface, full_grid, surface, grid_x.numpy(), grid_y.numpy(), sigma_chol
-
-
-
-    def visualise_approximation(
-        self, one_dimensional_grid: _A, all_grid_points: _A, mean_surface: _A, std_surface: _A, function_samples_on_grid: _A,
-        pi_u_tildes: _A, pi_1_tildes: _A, all_deltas: _A, recent_component_priors: Optional[_A], true_mean_surface: Optional[_A], true_std_surface: Optional[_A],
-        min_separation: float, max_separation: float, deltas_label: str
-    ):
-        """
-        Input:
-            All taken from util.inference_on_grid
-
-        If D = 1:
-            TODO: list everything!
-
-        If D = 2:
-            TODO: list everything!
-
-        TODO: shapes!
-        """
-
-        if self.num_features > 1:
-            raise NotImplementedError
-
-        else:
-            Q = self.num_models
-            figsize = 8
-            fig_surfaces = plt.figure(figsize = (figsize * 4, figsize * (Q+1)))
-
-            # axes_kernel = fig_surfaces.add_subplot(Q+1,4,2*Q)
-            axes_hist = fig_surfaces.add_subplot(Q+1,4,4*Q+1)
-            axes_hist.hist(all_deltas[:,1:].flatten(), 1024, density=True)
-            axes_hist.set_xlabel(deltas_label)
-
-            all_inducing_points = self.Z.detach().cpu().squeeze(-1).numpy()
-            all_inducing_points_means = self.m_u.detach().cpu().numpy()
-            if self.inducing_point_variational_parameterisation == 'gaussian':
-                all_inducing_points_covars = self.S_uu.detach().cpu().numpy()
-
-            for q in range(Q):
-                axes1D_linear = fig_surfaces.add_subplot(Q+1,4,q*4+1)
-                # axes1D_exponentiated = fig_surfaces.add_subplot(2,3,2)
-                axes_Suu = fig_surfaces.add_subplot(Q+1,4,q*4+2)
-                axes_simplex = fig_surfaces.add_subplot(Q+1,4,q*4+3)
-                axes_simplex_no_u = fig_surfaces.add_subplot(Q+1,4,q*4+4)
-
-                surface_color = axes1D_linear.plot(one_dimensional_grid, mean_surface[q], color = 'blue')[0].get_color()
-                lower_error_surface, upper_error_surface = mean_surface[q] - 2 * std_surface[q], mean_surface[q] + 2 * std_surface[q]
-                axes1D_linear.fill_between(one_dimensional_grid, lower_error_surface, upper_error_surface, color = surface_color, alpha = 0.2)
-
-                sample_colour = lighten_color(surface_color, 1.6)
-                for sample_on_grid in function_samples_on_grid[q]:
-                    axes1D_linear.plot(one_dimensional_grid, sample_on_grid, color = sample_colour, alpha = 0.4)
-
-                axes1D_linear.scatter(all_inducing_points[q], all_inducing_points_means[q], color = 'black', marker = 'o', s = 20)
-                axes1D_linear.plot([-torch.pi, torch.pi], [pi_u_tildes[q].item(), pi_u_tildes[q].item()], surface_color, linestyle= '-.', linewidth = 3)
-                axes1D_linear.plot([-torch.pi, torch.pi], [pi_1_tildes[q].item(), pi_1_tildes[q].item()], surface_color, linewidth = 3)
-
-                if true_mean_surface is not None:
-                    flattened_true_mean = true_mean_surface[q].flatten()
-                    axes1D_linear.scatter(all_deltas.flatten(), flattened_true_mean, color = 'red', alpha = 0.4, s = 5)
-                    if true_std_surface is not None:
-                        flattened_true_std = true_std_surface[q].flatten()
-                        axes1D_linear.scatter(all_deltas.flatten(), flattened_true_mean + 2 * flattened_true_std, color = 'red', alpha = 0.01, s = 5)
-                        axes1D_linear.scatter(all_deltas.flatten(), flattened_true_mean - 2 * flattened_true_std, color = 'red', alpha = 0.01, s = 5)
-                
-                if self.inducing_point_variational_parameterisation == 'gaussian':
-                    axes_Suu.imshow(all_inducing_points_covars[q], cmap = 'gray')
-
-                for sep in [min_separation, max_separation]:
-                    y_bot, y_top = axes1D_linear.get_ylim()
-                    axes1D_linear.plot([sep, sep], [y_bot, y_top], color = 'black', linestyle = '--')
-                    axes1D_linear.plot([-sep, -sep], [y_bot, y_top], color = 'black', linestyle = '--')
-                    axes1D_linear.set_ylim(y_bot, y_top)
-                    axes1D_linear.set_xlim(-torch.pi, torch.pi)
-
-                if recent_component_priors is not None:
-                    standard_swap_model_simplex_plots(recent_component_priors[q], axes_simplex, ax_no_u = axes_simplex_no_u)
-                    legend_without_repeats(axes_simplex)
-                    legend_without_repeats(axes_simplex_no_u)
-
-            axes1D_linear.set_xlabel(deltas_label)
-
-            return fig_surfaces

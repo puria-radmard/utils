@@ -11,6 +11,7 @@ from purias_utils.error_modelling_torus.non_parametric_error_model.generative_mo
 from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.emissions import VonMisesParametricErrorsEmissions, WrappedStableParametricErrorsEmissions
 from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model import NonParametricSwapErrorsGenerativeModel
 from purias_utils.error_modelling_torus.non_parametric_error_model.variational_approx import NonParametricSwapErrorsVariationalModel
+from purias_utils.error_modelling_torus.non_parametric_error_model.main import WorkingMemorySimpleSwapModel, WorkingMemoryFullSwapModel
 
 
 def setup_model_whole(
@@ -31,7 +32,7 @@ def setup_model_whole(
         make_variational_model = lambda min_seps: NonParametricSwapErrorsVariationalModel(num_models = num_models, R_per_dim = R_per_dim, num_features = 1, fix_non_swap = fix_non_swap, fix_inducing_point_locations = fix_inducing_point_locations, symmetricality_constraint = symmetricality_constraint, min_seps = min_seps, inducing_point_variational_parameterisation = inducing_point_variational_parameterisation_type).to(device)
         D = 1   # Only case where it has to be changed
     elif swap_type == 'spike_and_slab':
-        make_variational_model = lambda *x: torch.nn.Identity() # No parameters to be saved here!
+        make_variational_model = lambda *x: None
         D = 0 
 
     kernel_type_classes = {
@@ -64,8 +65,6 @@ def setup_model_whole(
         num_models, swap_function=make_swap_function(func_ss), error_emissions=make_emissions_model(ems_ss)
     )
 
-    variational_model, variational_models = None, None
-
     if shared_emission_distribution:
         generative_model = make_generative_model(None, None).to(device)
     else:
@@ -78,35 +77,30 @@ def setup_model_whole(
         assert swap_type != 'spike_and_slab', "Specifying min_seps does not make sense for spike_and_slab model!"
         min_seps = min_seps[:,delta_dimensions]
         if shared_swap_function:
-            variational_model = make_variational_model(min_seps.min(0))
+            variational_models = {0: make_variational_model(min_seps.min(0))}
         else:
             variational_models = {N: make_variational_model(min_sep_set_size) for min_sep_set_size, N in zip(min_seps, all_set_sizes)}
     else:
         if shared_swap_function:
-            variational_model = make_variational_model(None)
+            variational_model = {0: make_variational_model(None)}
         else:
             variational_models = {N: make_variational_model(None) for N in all_set_sizes}
+
+    if swap_type == 'spike_and_slab':
+        swap_model = WorkingMemorySimpleSwapModel(generative_model)
+    else:
+        swap_model = WorkingMemoryFullSwapModel(generative_model, variational_models)
 
     if resume_path is not None:
         map_location=None if device == 'cuda' else torch.device('cpu')
 
-        parameter_load_path = os.path.join(resume_path, '{model}.{ext}')
+        parameter_load_path = os.path.join(resume_path, '{model}.{exl}')
 
-        generative_model.load_state_dict(torch.load(parameter_load_path.format(model = f'generative_model', ext = 'mdl'), map_location=map_location))
-
+        swap_model.load_state_dict(torch.load(parameter_load_path.format(model = f'swap_model', ext = 'mdl'), map_location=map_location))
         if (emission_type == 'residual_deltas'):
-
             emissions_data = torch.load(parameter_load_path.format(model = f'generative_model_emission_histogram', ext = 'data'))
             for set_size, load in emissions_data.items():
-                generative_model.error_emissions.load_new_distribution(set_size, load['inference_locations'].to(device), load['inference_weights'].to(device))
+                swap_model.generative_model.error_emissions.load_new_distribution(set_size, load['inference_locations'].to(device), load['inference_weights'].to(device))
 
-        if shared_swap_function:
-            variational_model.load_state_dict(torch.load(parameter_load_path.format(model = 'variational_model', ext = 'mdl'), map_location=map_location))
-        else:
-            for k, v in variational_models.items():
-                v.load_state_dict(torch.load(parameter_load_path.format(model = f'variational_model_{k}', ext = 'mdl'), map_location=map_location))
+    return swap_model, D, delta_dimensions
     
-    return generative_model, variational_models, variational_model, D, delta_dimensions
-
-
-
