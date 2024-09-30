@@ -6,11 +6,23 @@ from torch.distributions import Dirichlet
 
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Literal
 
 
-from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.emissions import ErrorsEmissionsBase
-from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.swap_function import SwapFunctionBase
+from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.emissions import ErrorsEmissionsBase, VonMisesParametricErrorsEmissions, WrappedStableParametricErrorsEmissions
+from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.swap_function import SwapFunctionBase, NonParametricSwapFunctionExpCos, NonParametricSwapFunctionWeiland, SpikeAndSlabSwapFunction
+
+
+KERNEL_TYPE_CLASSES = {
+    'exp_cos': NonParametricSwapFunctionExpCos,
+    'weiland': NonParametricSwapFunctionWeiland,
+}
+
+EMISSION_TYPE_CLASSES = {
+    "von_mises": VonMisesParametricErrorsEmissions,
+    "wrapped_stable": WrappedStableParametricErrorsEmissions,
+    # "uniform": UniformParametricErrorsEmissions,
+}
 
 
 class NonParametricSwapErrorsGenerativeModel(nn.Module):
@@ -25,6 +37,63 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
 
         if (self.swap_function.function_set_sizes is not None) and (self.error_emissions.emissions_set_sizes is not None):
             assert self.swap_function.function_set_sizes == self.error_emissions.emissions_set_sizes
+
+    @classmethod
+    def from_typical_args(
+        cls, *_, 
+        num_models: int,
+        swap_type: str,
+        kernel_type: Optional[str],
+        emission_type: str,
+        fix_non_swap: bool,
+        remove_uniform: bool,
+        include_pi_u_tilde: bool,
+        include_pi_1_tilde: bool,
+        normalisation_inner: str,
+        shared_swap_function: bool,
+        shared_emission_distribution: bool,
+        all_set_sizes: List[int],
+        trainable_kernel_delta: bool,
+        num_features: int,
+        device = 'cuda',
+        **kwargs
+    ):
+        """
+        This is to replace the old setup_utils.py function logic!
+        """
+        swap_function_set_sizes = None if shared_swap_function else all_set_sizes
+        emission_set_sizes = None if shared_emission_distribution else all_set_sizes
+        
+        if swap_type == 'spike_and_slab':
+            swap_function = SpikeAndSlabSwapFunction(
+                num_models = num_models,
+                logits_set_sizes = swap_function_set_sizes,
+                remove_uniform = remove_uniform,
+                include_pi_u_tilde = include_pi_u_tilde,
+                include_pi_1_tilde = include_pi_1_tilde,
+                normalisation_inner = normalisation_inner
+            ).to(device)
+
+        else:
+            KernelClass = KERNEL_TYPE_CLASSES[kernel_type]
+            swap_function = KernelClass(
+                num_models = num_models,
+                num_features = num_features,
+                kernel_set_sizes = swap_function_set_sizes,
+                trainable_kernel_delta = trainable_kernel_delta,
+                remove_uniform = remove_uniform,
+                include_pi_u_tilde = include_pi_u_tilde,
+                fix_non_swap = fix_non_swap,
+                include_pi_1_tilde = include_pi_1_tilde,
+                normalisation_inner = normalisation_inner
+            ).to(device)
+
+        EmissionsClass = EMISSION_TYPE_CLASSES[emission_type]
+        error_emissions = EmissionsClass(num_models, emission_set_sizes)
+
+        return cls(num_models, swap_function, error_emissions)
+
+
 
     def get_marginalised_log_likelihood(self, estimation_deviations: _T, pi_vectors: _T, kwargs_for_individual_component_likelihoods: dict = {}):
         """

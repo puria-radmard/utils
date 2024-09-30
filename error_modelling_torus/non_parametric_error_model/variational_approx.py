@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import torch
 from torch import nn
 from torch import Tensor as _T
@@ -12,7 +14,7 @@ import warnings
 
 from numpy import ndarray as _A
 
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Dict
 
 
 class NonParametricSwapErrorsVariationalModel(nn.Module):
@@ -83,6 +85,65 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
 
             # # else:
                 self.register_parameter('S_uu_log_chol', nn.Parameter(torch.zeros(num_models, self.R, self.R, dtype = torch.float64), requires_grad = True))    # [Q, R (always), R]
+
+    @classmethod
+    def from_typical_args(
+        cls, *_, 
+        num_models: int,
+        swap_type: str,
+        R_per_dim: int,
+        fix_non_swap: bool, 
+        fix_inducing_point_locations: bool,
+        all_min_seps: Optional[_T],
+        inducing_point_variational_parameterisation_type: str,
+        symmetricality_constraint: bool,
+        shared_swap_function: bool,
+        all_set_sizes: List[int],
+        device = 'cuda',
+        **kwargs
+        ) -> Optional[Dict[int, NonParametricSwapErrorsVariationalModel]]:
+        """
+        This is to replace the old setup_utils.py function logic!
+        
+        If min_seps is provided, expecting it in shape [len(all_set_sizes), D], all > 0
+            if shared_swap_function then take min along the first dimension
+
+        Remember that when loading a model, there is no need to provide min_seps - it's just for inducing points initalisation, and loading a state dict with solve this!
+            Even if fix_inducing_point_locations given, inducing_points_tilde is still a parameter, just doesn't require grad
+        """
+        assert swap_type in ['cue_dim_only', 'est_dim_only', 'full', 'spike_and_slab']
+        if swap_type == 'spike_and_slab':
+            return None, ..., 0
+
+        delta_dimensions = [0] if swap_type == 'cue_dim_only' else [1] if swap_type == 'est_dim_only' else ...
+        D = 1 if swap_type in ['cue_dim_only', 'est_dim_only'] else 2
+
+        set_sizes = [0] if shared_swap_function else all_set_sizes
+
+        if all_min_seps is None:
+            all_min_seps_by_set_size = {ss: None for ss in set_sizes}
+        else:
+            assert list(all_min_seps.shape) == [len(all_set_sizes), 2], f"Not expecting all_min_seps of shape {list(all_min_seps.shape)}"
+            assert (all_min_seps >= 0.0).all()
+            assert fix_non_swap, "Should not have a min separation if delta = 0 is in the swap functions domain"
+            assert swap_type != 'spike_and_slab', "Specifying min_seps does not make sense for spike_and_slab model!"
+            all_min_seps = all_min_seps[:,delta_dimensions]
+            all_min_seps_by_set_size = {ss: min_seps for ss, min_seps in zip(set_sizes, all_min_seps)}
+
+        return {
+            ss: cls(
+                num_models = num_models,
+                R_per_dim = R_per_dim,
+                num_features = D,
+                fix_non_swap = fix_non_swap,
+                fix_inducing_point_locations = fix_inducing_point_locations,
+                symmetricality_constraint = symmetricality_constraint,
+                min_seps = all_min_seps_by_set_size[ss],
+                inducing_point_variational_parameterisation = inducing_point_variational_parameterisation_type
+            ).to(device)
+            for ss in all_set_sizes
+        }, delta_dimensions, D
+
 
     @staticmethod
     def generate_points_around_circle_with_min_separation(R_d: int, min_sep: Optional[float], symmetricality_constraint: bool):

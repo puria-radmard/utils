@@ -4,7 +4,7 @@ from torch.nn import Module, ModuleDict
 
 from numpy import ndarray as _A
 
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 from purias_utils.error_modelling_torus.non_parametric_error_model.variational_approx import NonParametricSwapErrorsVariationalModel
 from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model import NonParametricSwapErrorsGenerativeModel
@@ -345,4 +345,5 @@ class WorkingMemorySimpleSwapModel(WorkingMemoryFullSwapModel):
         return self.get_elbo_terms_easier(data, M, N, training_method, kwargs_for_individual_component_likelihoods)
     
     def visualise_variational_approximation(self, *args, **kwargs):
+        "TODO: implement this, but just for the simplex plots!"
         raise NotImplementedError

@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor as _T
 
-from typing import Optional
+from typing import Optional, List
 
 import os
 
@@ -15,76 +15,59 @@ from purias_utils.error_modelling_torus.non_parametric_error_model.main import W
 
 
 def setup_model_whole(
-    num_models, swap_type, kernel_type, emission_type, all_set_sizes, remove_uniform, include_pi_u_tilde, trainable_kernel_delta, R_per_dim, 
-    fix_non_swap, include_pi_1_tilde, fix_inducing_point_locations, symmetricality_constraint, inducing_point_variational_parameterisation_type, normalisation_inner,
-    shared_swap_function, shared_emission_distribution, min_seps: Optional[_T], resume_path: str, device='cuda', **kwargs
-    ):
-    """
-    If min_seps is provided, expecting it in shape [len(all_set_sizes), D], all > 0
-        if shared_swap_function then take min along the first dimension
-    Remember that when loading a model, there is no need to provide min_seps - it's just for inducing points initalisation, and loading a state dict with solve this!
-    """
-
-    if swap_type == 'full':
-        make_variational_model = lambda min_seps: NonParametricSwapErrorsVariationalModel(num_models = num_models, R_per_dim = R_per_dim, num_features = 2, fix_non_swap = fix_non_swap, fix_inducing_point_locations = fix_inducing_point_locations, symmetricality_constraint = symmetricality_constraint, min_seps = min_seps, inducing_point_variational_parameterisation = inducing_point_variational_parameterisation_type).to(device)
-        D = 2
-    elif swap_type in ['cue_dim_only', 'est_dim_only']:
-        make_variational_model = lambda min_seps: NonParametricSwapErrorsVariationalModel(num_models = num_models, R_per_dim = R_per_dim, num_features = 1, fix_non_swap = fix_non_swap, fix_inducing_point_locations = fix_inducing_point_locations, symmetricality_constraint = symmetricality_constraint, min_seps = min_seps, inducing_point_variational_parameterisation = inducing_point_variational_parameterisation_type).to(device)
-        D = 1   # Only case where it has to be changed
-    elif swap_type == 'spike_and_slab':
-        make_variational_model = lambda *x: None
-        D = 0 
-
-    kernel_type_classes = {
-        'exp_cos': NonParametricSwapFunctionExpCos,
-        'weiland': NonParametricSwapFunctionWeiland,
-    }
-
-    if swap_type == 'spike_and_slab':
-        assert kernel_type == 'weiland' # i.e. default
-        make_swap_function = lambda logits_set_sizes: SpikeAndSlabSwapFunction(num_models = num_models, logits_set_sizes = logits_set_sizes, remove_uniform = remove_uniform, include_pi_u_tilde = include_pi_u_tilde, include_pi_1_tilde = include_pi_1_tilde, normalisation_inner = normalisation_inner).to(device)
-    else:   # XXX: different arguments not allowed yet!
-        make_swap_function = lambda kernel_set_sizes: kernel_type_classes[kernel_type](num_models = num_models, num_features = D, kernel_set_sizes = kernel_set_sizes, trainable_kernel_delta = trainable_kernel_delta, remove_uniform = remove_uniform, include_pi_u_tilde = include_pi_u_tilde, fix_non_swap = fix_non_swap, include_pi_1_tilde = include_pi_1_tilde, normalisation_inner = normalisation_inner).to(device)
-
-    if swap_type == 'cue_dim_only':
-        delta_dimensions = [0]    # Only locations
-    elif swap_type == 'est_dim_only':
-        delta_dimensions = [1]    # Only colours
-    else:
-        delta_dimensions = ...
-
-    if emission_type in VALID_EMISSION_TYPES:
-        emission_type_classes = {
-            "von_mises": VonMisesParametricErrorsEmissions,
-            "wrapped_stable": WrappedStableParametricErrorsEmissions,
-            # "uniform": UniformParametricErrorsEmissions,
-        }
-        make_emissions_model = lambda emissions_set_sizes: emission_type_classes[emission_type](num_models, emissions_set_sizes)
-
-    make_generative_model = lambda func_ss, ems_ss: NonParametricSwapErrorsGenerativeModel(
-        num_models, swap_function=make_swap_function(func_ss), error_emissions=make_emissions_model(ems_ss)
+    *_, 
+    num_models: int,
+    swap_type: str,
+    kernel_type: Optional[str],
+    emission_type: str,
+    fix_non_swap: bool,
+    remove_uniform: bool,
+    include_pi_u_tilde: bool,
+    include_pi_1_tilde: bool,
+    normalisation_inner: str,
+    shared_swap_function: bool,
+    shared_emission_distribution: bool,
+    all_set_sizes: List[int],
+    trainable_kernel_delta: bool,
+    R_per_dim: int,
+    fix_inducing_point_locations: bool,
+    all_min_seps: Optional[_T],
+    inducing_point_variational_parameterisation_type: str,
+    symmetricality_constraint: bool,
+    resume_path: Optional[str],
+    device = 'cuda',
+):
+    variational_models, delta_dimensions, D = NonParametricSwapErrorsVariationalModel.from_typical_args(
+        num_models = num_models,
+        swap_type = swap_type,
+        R_per_dim = R_per_dim,
+        fix_non_swap = fix_non_swap,
+        fix_inducing_point_locations = fix_inducing_point_locations,
+        all_min_seps = all_min_seps,
+        inducing_point_variational_parameterisation_type = inducing_point_variational_parameterisation_type,
+        symmetricality_constraint = symmetricality_constraint,
+        shared_swap_function = shared_swap_function,
+        all_set_sizes = all_set_sizes,
+        device = device,
     )
 
-    if shared_emission_distribution:
-        generative_model = make_generative_model(None, None).to(device)
-    else:
-        generative_model = make_generative_model(all_set_sizes, all_set_sizes).to(device)
-
-    if min_seps is not None:
-        assert list(min_seps.shape) == [len(all_set_sizes), 2], f"Not expecting min_seps of shape {list(min_seps.shape)}"
-        assert (min_seps >= 0.0).all()  # a subset of dimensions might not have min sep
-        assert fix_non_swap, "Should not have a min separation if delta = 0 is in the swap functions domain"
-        assert swap_type != 'spike_and_slab', "Specifying min_seps does not make sense for spike_and_slab model!"
-        min_seps = min_seps[:,delta_dimensions]
-        if shared_swap_function:
-            variational_models = {0: make_variational_model(min_seps.min(0))}
-        else:
-            variational_models = {N: make_variational_model(min_sep_set_size) for min_sep_set_size, N in zip(min_seps, all_set_sizes)}
-    else:
-        if shared_swap_function:
-            variational_model = {0: make_variational_model(None)}
-        else:
-            variational_models = {N: make_variational_model(None) for N in all_set_sizes}
+    generative_model = NonParametricSwapErrorsGenerativeModel.from_typical_args(
+        num_models = num_models,
+        swap_type = swap_type,
+        kernel_type = kernel_type,
+        emission_type = emission_type,
+        fix_non_swap = fix_non_swap,
+        remove_uniform = remove_uniform,
+        include_pi_u_tilde = include_pi_u_tilde,
+        include_pi_1_tilde = include_pi_1_tilde,
+        normalisation_inner = normalisation_inner,
+        shared_swap_function = shared_swap_function,
+        shared_emission_distribution = shared_emission_distribution,
+        all_set_sizes = all_set_sizes,
+        trainable_kernel_delta = trainable_kernel_delta,
+        num_features = D,
+        device = device,
+    )
 
     if swap_type == 'spike_and_slab':
         swap_model = WorkingMemorySimpleSwapModel(generative_model)
@@ -93,14 +76,12 @@ def setup_model_whole(
 
     if resume_path is not None:
         map_location=None if device == 'cuda' else torch.device('cpu')
-
         parameter_load_path = os.path.join(resume_path, '{model}.{exl}')
-
         swap_model.load_state_dict(torch.load(parameter_load_path.format(model = f'swap_model', ext = 'mdl'), map_location=map_location))
-        if (emission_type == 'residual_deltas'):
-            emissions_data = torch.load(parameter_load_path.format(model = f'generative_model_emission_histogram', ext = 'data'))
-            for set_size, load in emissions_data.items():
-                swap_model.generative_model.error_emissions.load_new_distribution(set_size, load['inference_locations'].to(device), load['inference_weights'].to(device))
+
+        # if (emission_type == 'residual_deltas'):
+        #     emissions_data = torch.load(parameter_load_path.format(model = f'generative_model_emission_histogram', ext = 'data'))
+        #     for set_size, load in emissions_data.items():
+        #         swap_model.generative_model.error_emissions.load_new_distribution(set_size, load['inference_locations'].to(device), load['inference_weights'].to(device))
 
     return swap_model, D, delta_dimensions
-    
