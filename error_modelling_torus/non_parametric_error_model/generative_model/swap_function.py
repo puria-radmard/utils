@@ -5,7 +5,7 @@ from torch import Tensor as _T
 import numpy as np
 from numpy import ndarray as _A
 
-from typing import Union
+from typing import Dict
 
 from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.helpers import KernelParameterHolder, PiTildeHolder
 
@@ -66,10 +66,10 @@ class SwapFunctionBase(nn.Module):
         selected_components = (u > prob_cum).sum(-1)                    # [Q, M, N+1] -> [Q, M]
         return selected_components                              # [Q, M]
 
-    def generate_pi_vectors(self, set_size: int):    # [Q, M, N+1]
+    def generate_pi_vectors(self, set_size: int) -> Dict[str, _T]:    # [Q, M, N+1]
         raise NotImplementedError
 
-    def evaluate_kernel(self, set_size: int, data_1: _T, data_2: _T = None):
+    def evaluate_kernel(self, set_size: int, data_1: _T, data_2: _T = None) -> _T:
         raise NotImplementedError
 
     def evaluate_kernel_inner(self, differences_matrix: _T) -> _T:
@@ -121,11 +121,12 @@ class NonParametricSwapFunctionBase(SwapFunctionBase):
                 else nn.ModuleDict({str(N): PiTildeHolder(2.0, num_models) for N in kernel_set_sizes})
             )
     
-    def generate_pi_vectors(self, set_size: int, model_evaulations: _T, make_spike_and_slab = False):
+    def generate_pi_vectors(self, set_size: int, model_evaulations: _T, make_spike_and_slab = False, mc_average = True) -> Dict[str, _T]:
         """
         model_evaulations: (samples of) f, shaped [Q, I, M, N] --  see NonParametricSwapErrorsVariationalModel.reparameterised_sample
 
         output of shape [Q, M, N+1], where output[q,m,0] is the relevant pi_u probability for qth model being trained
+            OR [Q, I or K, M, N+1] if choosing not to perform the MC average
         """
         Q, I, M, N = model_evaulations.shape
         exp_pi_u_tilde = self.generate_exp_pi_u_tilde(set_size, I, M, model_evaulations.dtype, model_evaulations.device)    # [Q, I, M, 1]
@@ -141,10 +142,11 @@ class NonParametricSwapFunctionBase(SwapFunctionBase):
             pis[...,2:] = pis[...,2:].mean(keepdim=True)    # Replace [Q, I, 1, N-1]
             pis = pis.repeat(1, 1, M, 1)
             exp_grid = None # Not determined here...
-        pis = pis.mean(1)   # Average over MC draws
+        if mc_average:
+            pis = pis.mean(1)   # Average over MC draws
         return {'pis': pis, 'exp_grid': exp_grid}
 
-    def evaluate_kernel(self, set_size: int, data_1: _T, data_2: _T = None):
+    def evaluate_kernel(self, set_size: int, data_1: _T, data_2: _T = None) -> _T:
         """
         data_i comes in shape [Q, N_i, D_i]
 
@@ -210,7 +212,7 @@ class SpikeAndSlabSwapFunction(SwapFunctionBase):
 
     def __init__(self, num_models: int, logits_set_sizes: list, remove_uniform: bool, include_pi_u_tilde: bool, include_pi_1_tilde: bool, normalisation_inner: str) -> None:
         
-        super().__init__(num_models, logits_set_sizes, remove_uniform, include_pi_u_tilde = False, normalisation_inner = normalisation_inner)
+        super().__init__(num_models, logits_set_sizes, remove_uniform, include_pi_u_tilde = include_pi_u_tilde, normalisation_inner = normalisation_inner)
         if not remove_uniform:
             assert include_pi_u_tilde or include_pi_1_tilde, "Cannot fix both pi_u_tilde and pi_1_tilde in spike and slab model!"
 
@@ -239,7 +241,7 @@ class SpikeAndSlabSwapFunction(SwapFunctionBase):
         exp_pi_swap_tilde = self.normalisation_inner(pi_swap_tilde)
         return exp_pi_swap_tilde.to(device=device, dtype=dtype)
 
-    def generate_pi_vectors(self, set_size: int, batch_size: int):
+    def generate_pi_vectors(self, set_size: int, batch_size: int) -> Dict[str, _T]:
         """
         Output is of shape [Q, M, N+1], where output[q,0,:,n] is the same for all data
         """

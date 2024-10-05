@@ -74,6 +74,28 @@ class ConcentrationParameterHolder(HolderBase):
         return self.log_concentration.exp()
 
 
+class DoubleConcentrationParameterHolder(HolderBase):
+    """
+    This is a bit of a weird case where we want two concentrations but want one to be always not greater than the other
+    """
+    def __init__(self, num_models: int):
+        super().__init__(num_models)
+        log_larger_concentration_raw = (8 + (0.3 * torch.randn(num_models)).exp()).log().to(torch.float64)
+        log_smaller_concentration_raw = (12 + (0.3 * torch.randn(num_models)).exp()).log().to(torch.float64)
+        # smaller_concentration_ratio_raw = (0.2 * torch.randn(num_models)).to(torch.float64)
+        self.register_parameter('log_larger_concentration', nn.Parameter(log_larger_concentration_raw, requires_grad = True))
+        self.register_parameter('log_smaller_concentration', nn.Parameter(log_smaller_concentration_raw, requires_grad = True))
+        # self.register_parameter('smaller_concentration_ratio_raw', nn.Parameter(smaller_concentration_ratio_raw, requires_grad = True))
+
+    @property
+    def concentrations(self):
+        larger_concentration = self.log_larger_concentration.exp()
+        smaller_concentration = self.log_smaller_concentration.exp()
+        # smaller_concentration_as_ratio = self.smaller_concentration_ratio_raw.sigmoid()
+        # smaller_concentration = smaller_concentration_as_ratio * larger_concentration
+        return larger_concentration, smaller_concentration
+
+
 class StableAlphaHolder(HolderBase):
     def __init__(self, num_models: int):
         super().__init__(num_models)

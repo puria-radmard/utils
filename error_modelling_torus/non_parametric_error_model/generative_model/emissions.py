@@ -187,7 +187,6 @@ class WrappedStableParametricErrorsEmissions(ParametricErrorsEmissionsBase):
         if gamma is None:
             gamma = self.gamma_scale_holder[str(set_size)].gamma        # [Q]
 
-
         gamma = gamma.reshape(self.num_models, *[1]*(len(estimation_deviations.shape)-1))    # [Q, 1, ..., 1]
         alpha = alpha.reshape(self.num_models, *[1]*(len(estimation_deviations.shape)-1))    # [Q, 1, ..., 1]
         gamma_to_the_alpha = torch.pow(gamma, alpha).reshape(self.num_models, *[1]*(len(estimation_deviations.shape)-1))    # [Q, 1, ..., 1]
@@ -208,6 +207,57 @@ class WrappedStableParametricErrorsEmissions(ParametricErrorsEmissionsBase):
         # plt.savefig('ws_ed.png')
 
         return result
+
+
+
+class DoubleVonMisesParametricErrorsEmissions(ParametricErrorsEmissionsBase):
+
+    """
+    Special case scenario!
+    Emission is two von Mises distributions convolved with one another
+    """
+
+    def __init__(self, num_models: int, emissions_set_sizes: list) -> None:
+        super().__init__(num_models, emissions_set_sizes)
+        assert emissions_set_sizes is None, "DoubleVonMisesParametricErrorsEmissions current not meant to be used for N > 1"
+        self.double_conc_holder = DoubleConcentrationParameterHolder(num_models)
+
+    def emission_parameter(self, set_size):
+        concentrations = self.double_conc_holder[str(set_size)].concentrations   # [Q], [Q]
+        return torch.stack(concentrations, -1)                                # [Q, 2]
+           
+    def generate_samples(self, comp_means: _T, set_size: int, model_index: int, **kwargs):
+        raise NotImplementedError
+
+    def individual_component_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T):
+        assert set_size == 1, "DoubleVonMisesParametricErrorsEmissions current not meant to be used for N > 1"
+        assert estimation_deviations.shape[0] == self.num_models
+
+        larger_concentration, smaller_concentration = self.double_conc_holder[str(set_size)].concentrations
+        larger_concentration = larger_concentration.reshape(self.num_models, *[1]*(len(estimation_deviations.shape)-1))     # [Q, 1, ..., 1], same all the way through (no aggregation here!)
+        smaller_concentration = smaller_concentration.reshape(self.num_models, *[1]*(len(estimation_deviations.shape)-1))
+
+        conc_combination = (
+            larger_concentration.square() + smaller_concentration.square() + 
+            (2 * larger_concentration * smaller_concentration * estimation_deviations.cos())
+        ).sqrt()
+
+        numerator = _log_modified_bessel_fn(conc_combination, order=0).exp()
+        denomintor = 2 * torch.pi * _log_modified_bessel_fn(smaller_concentration).exp() * _log_modified_bessel_fn(larger_concentration).exp()
+
+        return numerator / denomintor
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

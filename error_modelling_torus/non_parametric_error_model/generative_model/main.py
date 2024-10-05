@@ -9,7 +9,7 @@ from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angl
 from typing import Optional, Dict, List, Literal
 
 
-from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.emissions import ErrorsEmissionsBase, VonMisesParametricErrorsEmissions, WrappedStableParametricErrorsEmissions
+from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.emissions import ErrorsEmissionsBase, VonMisesParametricErrorsEmissions, WrappedStableParametricErrorsEmissions, DoubleVonMisesParametricErrorsEmissions
 from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.swap_function import SwapFunctionBase, NonParametricSwapFunctionExpCos, NonParametricSwapFunctionWeiland, SpikeAndSlabSwapFunction
 
 
@@ -21,6 +21,7 @@ KERNEL_TYPE_CLASSES = {
 EMISSION_TYPE_CLASSES = {
     "von_mises": VonMisesParametricErrorsEmissions,
     "wrapped_stable": WrappedStableParametricErrorsEmissions,
+    "double_von_mises": DoubleVonMisesParametricErrorsEmissions,
     # "uniform": UniformParametricErrorsEmissions,
 }
 
@@ -118,7 +119,7 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
 
         joint_component_and_error_likelihood = individual_component_likelihoods * pi_vectors    # [Q, M, N+1] - p(y[m] | beta[n], Z[m]) * p(beta[n]| Z[m]) = p(y[m], beta[n] | Z[m])
         likelihood_per_datapoint = joint_component_and_error_likelihood.sum(-1).log()           # [Q, M, N+1] -> [Q, M] -> [Q, M] = log p(y[m] | Z[m])
-        total_log_likelihood = likelihood_per_datapoint.sum(1)                                  # [Q]
+        total_log_likelihood = likelihood_per_datapoint.sum(-1)                                 # [Q]
 
         # [Q, M, N+1] - p(y[m], beta[n] | Z[m]) / p(y[m] | Z[m]) =  p(beta[n] | y[m], Z[m])
         posterior_vectors = joint_component_and_error_likelihood / joint_component_and_error_likelihood.sum(-1, keepdim = True)

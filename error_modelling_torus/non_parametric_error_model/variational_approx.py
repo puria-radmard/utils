@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch import Tensor as _T
 
-from math import prod
+from math import prod, log as mathlog
 from itertools import product
 import matplotlib.pyplot as plt
 
@@ -131,7 +131,7 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             all_min_seps_by_set_size = {ss: min_seps for ss, min_seps in zip(set_sizes, all_min_seps)}
 
         return {
-            ss: cls(
+            str(ss): cls(
                 num_models = num_models,
                 R_per_dim = R_per_dim,
                 num_features = D,
@@ -220,44 +220,43 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             return self.m_u_raw
 
     @property
+    def S_uu_chol(self):         # [Q, R, R]
+        if self.inducing_point_variational_parameterisation == 'vanilla':
+            raise TypeError('Cannot access S_uu_chol for vanilla variational model')
+        else:
+            chol = torch.tril(self.S_uu_log_chol)
+            diag_index = range(self.R)
+            chol[:, diag_index, diag_index] = chol[:,diag_index, diag_index].exp()           # [Q, R, R]  
+            return chol      
+
+    @property
     def S_uu(self):         # [Q, R, R]
         if self.inducing_point_variational_parameterisation == 'vanilla':
             return 0.0
 
-        # elif self.symmetricality_constraint:
-            
-        #     assert self.num_features == 1, "Havne't done this for D>1 yet!! needs complete rechanging"
-
-        #     L_a = torch.tril(self.S_uu_L_a_log)
-        #     L_a[range(len(L_a)),range(len(L_a))] = L_a[range(len(L_a)),range(len(L_a))].exp()
-        #     L_a_inv = torch.linalg.inv(L_a)
-
-        #     A = L_a @ L_a.T
-        #     A_inv = torch.linalg.inv(A)
-        #     B = self.S_uu_B
-        #     S = A - B @ A_inv @ B.T
-        #     try:
-        #         L_s = torch.linalg.cholesky(S)
-        #     except:
-        #         import pdb; pdb.set_trace()
-
-        #     chol = torch.zeros(self.R, self.R, dtype = L_s.dtype, device = L_s.device)
-            
-        #     bs = self.R // len(self.all_quadrant_mults) # block size
-        #     chol[:bs,:bs] = L_a
-        #     chol[bs:,bs:] = L_s
-        #     chol[bs:,:bs] = B @ L_a_inv.T
-
         else:
-            chol = torch.tril(self.S_uu_log_chol)
-            diag_index = range(self.R)
-            chol[:, diag_index, diag_index] = chol[:,diag_index, diag_index].exp()           # [Q, R, R]
-
-
-        S_uu = torch.bmm(chol, chol.transpose(1, 2))
-
-        return S_uu
+            chol = self.S_uu_chol 
+            S_uu = torch.bmm(chol, chol.transpose(1, 2))
+            return S_uu
     
+    def sample_from_variational_prior(self, num_samples: int) -> Dict[str, _T]:
+        """
+        Simply sample from N(m_u, S_uu)
+        Returns:
+            samples of shape [Q, K, R] where K is num_samples
+            sample_likelihoods of shape [Q, K]
+        """
+        S_uu_chol = self.S_uu_chol                  # [Q, R, R]
+        m_u = self.m_u.unsqueeze(1)                 # [Q, 1, R]
+        eps = torch.randn(self.num_models, num_samples, self.R, dtype = m_u.dtype, device = m_u.device) # [Q, K, R]
+        original_lhs = mathlog((2 * torch.pi)**(-self.R / 2.)) + (-0.5 * (eps * eps).sum(-1))                        # [Q, K]
+        cholesky_determinant = S_uu_chol.diagonal(offset = 0, dim1 = -1, dim2 = -2).prod(-1,keepdim=True)        # [Q, 1]
+        new_lhs = original_lhs / cholesky_determinant
+        return {
+            'samples': m_u + torch.bmm(eps, S_uu_chol.transpose(-1, -2)), # [Q, K, R]
+            'sample_log_likelihoods': new_lhs   # [Q, K]
+        }
+
     @staticmethod
     def batched_inner_product(M, x):
         """
@@ -367,17 +366,50 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         """
         mu = self.batched_inner_product_mix(K_uu_inv, k_ud, self.m_u)
         return mu
-    
-    def reparameterised_sample(self, num_samples: int, mu: _T, sigma_chol: _T, M: int, N: int):
+
+    def variational_gp_inference_conditioned_on_inducing_points_function(self, u: _T, k_ud: _T, K_dd: _T, K_uu_inv: _T):
         """
-            mu and sigma_chol come from variational_gp_inference: [Q, MN] and [Q, MN, MN]
+        See variational_gp_inference for logic and most shapes
+        This time, rather than integrating out the variational function distribution over inducing point, we fix it at u
+        There is a key difference in the logic here:
+            
+            Shape of u: [Q, K, R] where Q and R are defined above, and K is number of samples (not the same as I, the number of samples when estimating the ELBO)
+            
+            We are conditioning at many points at once, so we generate many mus and sigmas at once
+            
+            However, we only reflect this in the shape of mu, which is given a new dimension -> [Q, K, MN]
+        """
+        assert self.inducing_point_variational_parameterisation == 'gaussian', "Cannot condition on u vector if inducing_point_variational_parameterisation is 'vanilla'"
+        assert tuple(u.shape) == (self.num_models, u.shape[1], self.R)
+
+        sigma = K_dd - self.batched_inner_product_matrix(K_uu_inv, k_ud)    # [Q, MN, MN]
+        
+        mu_first = torch.bmm(u, K_uu_inv.transpose(1, 2)) # [Q, K, R] @ [Q, R, R] -> [Q, K, R]
+        mu = (mu_first.unsqueeze(-1) * k_ud.unsqueeze(1)).sum(-2) # [Q, K, R, 1] * [Q, 1, R, MN] -> [Q, K, R, MN] -> [Q, K, MN]
+        
+        sigma_perturb = torch.eye(sigma.shape[1], device = sigma.device, dtype = sigma.dtype).unsqueeze(0).repeat(self.num_models, 1, 1)
+        sigma_chol = torch.linalg.cholesky(sigma + 1e-3 * sigma_perturb)
+        return mu, sigma, sigma_chol   # [Q, K, MN], [Q, MN, MN], [Q, MN, MN]
+    
+    def reparameterised_sample(self, num_samples: int, mu: _T, sigma_chol: _T, M: int, N: int, unsqueeze_mu = True):
+        """
+            if unsqueeze_mu: mu and sigma_chol come from variational_gp_inference: [Q, MN] and [Q, MN, MN]
+            else: mu and sigma_chol come from variational_gp_inference_conditioned_on_inducing_points_function: [Q, K, MN] and [Q, MN, MN]
+            
+            num_samples is I!
 
             return is of shape [Q, I, M, N]
         """
-        deduped_MN = mu.shape[1]
+        if unsqueeze_mu:
+            mu = mu.unsqueeze(1)
+            num_samples_reshape = num_samples
+        else:
+            assert num_samples == 1, "Cannot sample on reparameterised_sample"
+            num_samples_reshape = mu.shape[1]
+        deduped_MN = mu.shape[-1]
         eps = torch.randn(self.num_models, num_samples, deduped_MN, dtype = mu.dtype, device = mu.device) # [Q, I, MN (dedup size)]
-        model_evals = mu.unsqueeze(1) + torch.bmm(eps, sigma_chol.transpose(-1, -2))   # [Q, I, MN]
-        readded_model_evals = self.reinclude_model_evals(model_evals, M, N, num_samples)    # [Q, I, M, N]
+        model_evals = mu + torch.bmm(eps, sigma_chol.transpose(-1, -2))   # [Q, I, MN]
+        readded_model_evals = self.reinclude_model_evals(model_evals, M, N, num_samples_reshape)    # [Q, I or K, M, N]
         return readded_model_evals
 
     def reinclude_model_evals(self, model_evals: _T, num_displays: int, set_size: int, num_mc_samples: int):

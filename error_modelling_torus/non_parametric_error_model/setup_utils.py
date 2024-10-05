@@ -5,10 +5,6 @@ from typing import Optional, List
 
 import os
 
-from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model import VALID_EMISSION_TYPES
-
-from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.swap_function import NonParametricSwapFunctionExpCos, NonParametricSwapFunctionWeiland, SpikeAndSlabSwapFunction
-from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.emissions import VonMisesParametricErrorsEmissions, WrappedStableParametricErrorsEmissions
 from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model import NonParametricSwapErrorsGenerativeModel
 from purias_utils.error_modelling_torus.non_parametric_error_model.variational_approx import NonParametricSwapErrorsVariationalModel
 from purias_utils.error_modelling_torus.non_parametric_error_model.main import WorkingMemorySimpleSwapModel, WorkingMemoryFullSwapModel
@@ -34,6 +30,8 @@ def setup_model_whole(
     all_min_seps: Optional[_T],
     inducing_point_variational_parameterisation_type: str,
     symmetricality_constraint: bool,
+    num_variational_samples: int,
+    num_importance_sampling_samples: int,
     resume_path: Optional[str],
     device = 'cuda',
 ):
@@ -72,7 +70,7 @@ def setup_model_whole(
     if swap_type == 'spike_and_slab':
         swap_model = WorkingMemorySimpleSwapModel(generative_model)
     else:
-        swap_model = WorkingMemoryFullSwapModel(generative_model, variational_models)
+        swap_model = WorkingMemoryFullSwapModel(generative_model, variational_models, num_variational_samples, num_importance_sampling_samples)
 
     if resume_path is not None:
         map_location=None if device == 'cuda' else torch.device('cpu')
