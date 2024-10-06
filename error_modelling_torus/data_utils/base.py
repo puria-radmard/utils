@@ -5,7 +5,7 @@ from torch import Tensor as _T
 
 from abc import ABC, abstractmethod
 
-from typing import List, Dict, Type, Optional
+from typing import List, Dict, Optional, Union
 
 
 class EstimateDataLoaderBase(ABC):
@@ -24,7 +24,7 @@ class EstimateDataLoaderBase(ABC):
     train_indices: _T       # [Q, M_train]
     test_indices: _T        # [Q, M_test]
 
-    def __init__(self, all_deltas: _T, all_errors: _T, all_target_zetas: _T, M_batch: int, M_test: int, num_repeats: int, device: str) -> None:
+    def __init__(self, all_deltas: _T, all_errors: _T, all_target_zetas: _T, M_batch: int, M_test: Union[int, float], num_repeats: int, device: str) -> None:
         num_examples, self.set_size, self.features = all_deltas.shape
         
         assert tuple(all_errors.shape) == (num_examples, self.set_size)
@@ -36,9 +36,13 @@ class EstimateDataLoaderBase(ABC):
         self.all_deltas = all_deltas
         self.all_target_zetas = all_target_zetas
 
+        if M_test < 1:
+            M_test = int(all_deltas.shape[0] * M_test)
+        else:
+            assert isinstance(M_test, int) and M_test >= 0
+
         M_train_each = all_deltas.shape[0] - M_test
         print(M_train_each, 'training examples and', M_test, 'testing examples for N =', self.set_size)
-        self.__dict__.update(self.sort_out_M_bullshit(M_batch, M_train_each, M_test, num_repeats))
 
         self.num_repeats = num_repeats
         self.device = device
@@ -51,33 +55,36 @@ class EstimateDataLoaderBase(ABC):
         self.train_indices = torch.tensor(train_indices)    # [Q, M_train]
         self.test_indices = torch.tensor(test_indices)      # [Q, M_test]
 
-    def __get_batch(self, batch_indices: _T):
+    def get_batch(self, batch_indices: _T):
         assert len(batch_indices.shape) == 2 and batch_indices.shape[0] == self.num_repeats
         deltas_batch = torch.stack([self.all_deltas[bi] for bi in batch_indices], dim = 0)                      # [Q, batch, N, D] -- not the same for each q!!
-        errors_batch = torch.stack([self.all_errors[q,bi] for (q, bi) in enumerate(batch_indices)], dim = 0)    # [Q, batch, N, D]
+        errors_batch = torch.stack([self.all_errors[q,bi] for (q, bi) in enumerate(batch_indices)], dim = 0)    # [Q, batch, N]
         return deltas_batch, errors_batch
 
     def iterate_train_batches(self, *_, dimensions, shuffle, total: Optional[int] = None):
         num_train_examples = self.M_train
         if shuffle:
+            M_batch = self.M_batch if self.M_batch > 0 else None
             for _ in range(total):
-                import pdb; pdb.set_trace(header = 'check that this works!!')
-                batch_indices = torch.stack([self.train_indices[q][torch.randperm(num_train_examples)[:self.M_batch]] for q in range(self.num_repeats)])
-                deltas_batch, errors_batch = self.__get_batch(batch_indices)
-                yield self.set_size, len(batch_indices), deltas_batch[...,dimensions], errors_batch, batch_indices
+                batch_indices = torch.stack([self.train_indices[q][torch.randperm(num_train_examples)[:M_batch]] for q in range(self.num_repeats)])
+                deltas_batch, errors_batch = self.get_batch(batch_indices)
+                yield self.set_size, batch_indices.shape[1], deltas_batch[...,dimensions], errors_batch, batch_indices
         else:
             assert total == None, 'Cannot define total number of training batches if not shuffling training set'
             for i in range(self.num_train_batches):
                 import pdb; pdb.set_trace(header = 'check that this works!!')
-                batch_indices = torch.stack([self.train_indices[q][i*self.M_batch: (i+1)*self.M_batch] for q in range(self.num_repeats)])
-                deltas_batch, errors_batch = self.__get_batch(batch_indices)
-                yield self.set_size, len(batch_indices), deltas_batch[...,dimensions], errors_batch, batch_indices
+                batch_indices = torch.stack([self.train_indices[q][i*self.M_batch:(i+1)*self.M_batch] for q in range(self.num_repeats)])
+                deltas_batch, errors_batch = self.get_batch(batch_indices)
+                yield self.set_size, batch_indices.shape[1], deltas_batch[...,dimensions], errors_batch, batch_indices
 
     def all_test_batches(self, *_, dimensions):
         for i in range(self.num_test_batches):
-            batch_indices = torch.stack([self.train_indices[q][i*self.M_batch:(i+1)*self.M_batch] for q in range(self.num_repeats)])
-            deltas_batch, errors_batch = self.__get_batch(batch_indices)
-            yield self.set_size, len(batch_indices), deltas_batch[...,dimensions], errors_batch, batch_indices
+            if self.num_test_batches > 1:
+                batch_indices = torch.stack([self.test_indices[q][i*self.M_batch:(i+1)*self.M_batch] for q in range(self.num_repeats)])
+            else:
+                batch_indices = self.test_indices
+            deltas_batch, errors_batch = self.get_batch(batch_indices)
+            yield self.set_size, batch_indices.shape[1], deltas_batch[...,dimensions], errors_batch, batch_indices
 
     @property
     def M_test(self) -> int:
@@ -89,17 +96,26 @@ class EstimateDataLoaderBase(ABC):
 
     @property
     def num_train_batches(self) -> int:
-        M_train = self.M_train
-        return (M_train//self.M_batch) + (1 if (self.M_train%self.M_batch)!=0 else 0)
+        if self.M_batch > 0:
+            M_train = self.M_train
+            return (M_train//self.M_batch) + (1 if (self.M_train%self.M_batch)!=0 else 0)
+        else:
+            return 1
 
     @property
     def num_test_batches(self) -> int:
-        M_test = self.M_test
-        return (M_test//self.M_batch) + (1 if (self.M_test%self.M_batch)!=0 else 0)
+        if self.M_batch > 0:
+            M_test = self.M_test
+            return (M_test//self.M_batch) + (1 if (self.M_test%self.M_batch)!=0 else 0)
+        else:
+            return 1 if self.M_test > 0 else 0
 
     def set_train_indices(self, train_indices: _T, test_indices: _T):
-        assert train_indices.shape == self.train_indices.shape
-        assert test_indices.shape == self.test_indices.shape
+        assert test_indices.shape == self.test_indices.shape    # this is never changed
+
+        # We may have called self.discard_last_n_training_examples
+        assert tuple(train_indices.shape) == (self.num_repeats, train_indices.shape[1])
+        train_indices.shape[1] <= self.train_indices.shape[1]
 
         import pdb; pdb.set_trace(header = 'assert these add up to a valud full indices set on each Q')
 
@@ -107,8 +123,20 @@ class EstimateDataLoaderBase(ABC):
         self.test_indices = test_indices
 
     def discard_last_n_training_examples(self, n):
-        assert n>= 0
+        assert n > 0
         self.train_indices = self.train_indices[:,:-n]
+
+    def separate_to_test_and_train(self, quantites: _T, average_over_data = False):
+        assert tuple(quantites.shape) == (self.num_repeats, self.M_test + self.M_train)
+
+        training_quantities = quantites.gather(-1, self.train_indices.to(quantites.device))
+        testing_quantities = quantites.gather(-1, self.test_indices.to(quantites.device))
+
+        if average_over_data:
+            training_quantities = training_quantities.mean(-1)
+            testing_quantities = testing_quantities.mean(-1)
+
+        return training_quantities, testing_quantities
 
 
 class MultipleSetSizesActivitySetDataGeneratorEnvelopeBase(ABC):
@@ -121,7 +149,7 @@ class MultipleSetSizesActivitySetDataGeneratorEnvelopeBase(ABC):
 
     D: int
 
-    def __init__(self, M_batch: int, feature_names: List[str], data_generators: Dict[int, Type[EstimateDataLoaderBase]], device: str):
+    def __init__(self, M_batch: int, feature_names: List[str], data_generators: Dict[int, EstimateDataLoaderBase], device: str):
 
         self.device = device
         self.M_batch = M_batch
@@ -138,7 +166,7 @@ class MultipleSetSizesActivitySetDataGeneratorEnvelopeBase(ABC):
 
         self.set_size_to_M_train_each = {N: v.M_train for N, v in self.data_generators.items()}
 
-    def iterate_train_batches(self, *_, dimensions, shuffle, total = None, return_indices = False, N = None):
+    def iterate_train_batches(self, *_, dimensions, shuffle, total = None, N = None):
         if shuffle:
             for t in range(total):
                 if N==None:
@@ -157,11 +185,19 @@ class MultipleSetSizesActivitySetDataGeneratorEnvelopeBase(ABC):
                 for ret in self.data_generators[N].iterate_train_batches(dimensions = dimensions, shuffle = False, total = None):
                     yield ret
 
-    def all_test_batches(self, *_, dimensions):
+    def all_test_batches(self, *_, dimensions, N = None):
         "Just go through each one, no random selection"
-        for dg in self.data_generators.values():
-            for ret in dg.all_test_batches(dimensions = dimensions):
-                yield ret
+        if N == None:
+            for dg in self.data_generators.values():
+                for ret in dg.all_test_batches(dimensions = dimensions):
+                    yield ret
+        else:
+            for ss, dg in self.data_generators.items():
+                if ss == N:
+                    for ret in dg.all_test_batches(dimensions = dimensions):
+                        yield ret
+                else:
+                    continue
 
 
 

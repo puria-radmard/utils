@@ -42,7 +42,7 @@ def fixed_aspect_ratio(ax, ratio):
     ax.set_aspect(ratio*(xrange/yrange), adjustable='box')
 
 
-def configure_logging_paths(logging_directory, index_new = True):
+def configure_logging_paths(logging_directory, log_suffixes = [""], index_new = True):
     """
     Given a base log path, create a logging folder for this job (logging_directory with an index).
     Inside that create a txt file for string logging.
@@ -53,15 +53,21 @@ def configure_logging_paths(logging_directory, index_new = True):
             try:
                 curr_path = f"{logging_directory}_{i}"
                 os.mkdir(curr_path)
-                print_path = os.path.join(curr_path, "epoch_log.csv")
+                print_paths = []
+                for ls in log_suffixes:
+                    print_path = os.path.join(curr_path, f"epoch_log_{ls}.csv")
+                    print_paths.append(print_path)
                 warning_file = os.path.join(curr_path, "warnings.txt")
-                return print_path, curr_path, warning_file
+                return print_paths, curr_path, warning_file
             except FileExistsError:
                 i += 1
         raise Exception("Too many subfolders being created!")
     else:
         os.mkdir(logging_directory)
-        print_path = os.path.join(logging_directory, "epoch_log.csv")
+        print_paths = []
+        for ls in log_suffixes:
+            print_path = os.path.join(logging_directory, f"epoch_log_{ls}.csv")
+            print_paths.append(print_path)
         warning_file = os.path.join(logging_directory, "warnings.txt")
         return print_path, logging_directory, warning_file
 

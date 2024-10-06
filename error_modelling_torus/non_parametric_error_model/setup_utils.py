@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor as _T
 
-from typing import Optional, List
+from typing import Optional, List, Tuple, Union
 
 import os
 
@@ -34,7 +34,8 @@ def setup_model_whole(
     num_importance_sampling_samples: int,
     resume_path: Optional[str],
     device = 'cuda',
-):
+    regenerate_kernel_until_stability: bool = True,
+) -> Tuple[Union[WorkingMemorySimpleSwapModel, WorkingMemoryFullSwapModel], int, List[int]]:
     variational_models, delta_dimensions, D = NonParametricSwapErrorsVariationalModel.from_typical_args(
         num_models = num_models,
         swap_type = swap_type,
@@ -49,28 +50,41 @@ def setup_model_whole(
         device = device,
     )
 
-    generative_model = NonParametricSwapErrorsGenerativeModel.from_typical_args(
-        num_models = num_models,
-        swap_type = swap_type,
-        kernel_type = kernel_type,
-        emission_type = emission_type,
-        fix_non_swap = fix_non_swap,
-        remove_uniform = remove_uniform,
-        include_pi_u_tilde = include_pi_u_tilde,
-        include_pi_1_tilde = include_pi_1_tilde,
-        normalisation_inner = normalisation_inner,
-        shared_swap_function = shared_swap_function,
-        shared_emission_distribution = shared_emission_distribution,
-        all_set_sizes = all_set_sizes,
-        trainable_kernel_delta = trainable_kernel_delta,
-        num_features = D,
-        device = device,
-    )
+    stable_kernel_generated = False
+    failed_attempts = 0
 
-    if swap_type == 'spike_and_slab':
-        swap_model = WorkingMemorySimpleSwapModel(generative_model)
-    else:
-        swap_model = WorkingMemoryFullSwapModel(generative_model, variational_models, num_variational_samples, num_importance_sampling_samples)
+    while not stable_kernel_generated:
+
+        print(f'Initialising generative_model after {failed_attempts} failed attempts at stability...')
+
+        generative_model = NonParametricSwapErrorsGenerativeModel.from_typical_args(
+            num_models = num_models,
+            swap_type = swap_type,
+            kernel_type = kernel_type,
+            emission_type = emission_type,
+            fix_non_swap = fix_non_swap,
+            remove_uniform = remove_uniform,
+            include_pi_u_tilde = include_pi_u_tilde,
+            include_pi_1_tilde = include_pi_1_tilde,
+            normalisation_inner = normalisation_inner,
+            shared_swap_function = shared_swap_function,
+            shared_emission_distribution = shared_emission_distribution,
+            all_set_sizes = all_set_sizes,
+            trainable_kernel_delta = trainable_kernel_delta,
+            num_features = D,
+            device = device,
+        )
+
+        if swap_type == 'spike_and_slab':
+            swap_model = WorkingMemorySimpleSwapModel(generative_model)
+            this_kernel_stable = True
+        else:
+            swap_model = WorkingMemoryFullSwapModel(generative_model, variational_models, num_variational_samples, num_importance_sampling_samples)
+            this_kernel_stable = swap_model.check_Kuu_stability()
+
+        stable_kernel_generated = (
+            this_kernel_stable or (not regenerate_kernel_until_stability)
+        )
 
     if resume_path is not None:
         map_location=None if device == 'cuda' else torch.device('cpu')

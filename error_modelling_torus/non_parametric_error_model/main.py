@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 
 from math import log as mathlog
 
+from purias_utils.util.api import return_as_obj
 from purias_utils.util.plotting import standard_swap_model_simplex_plots, legend_without_repeats, lighten_color
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
 
@@ -45,9 +46,9 @@ class WorkingMemoryFullSwapModel(Module):
     def get_variational_model(self, N) -> NonParametricSwapErrorsVariationalModel:
         return self.variational_models['0'] if self.shared_variational_model else self.variational_models[str(N)]
 
-    def get_elbo_terms(self, deltas: _T, data: Optional[_T], training_method: str = 'error', max_variational_batch_size = 0, return_kl = True, kwargs_for_individual_component_likelihoods = {}) -> Dict[str, Optional[_T]]:
-
-        Q, M, N, D = deltas.shape
+    @return_as_obj
+    def minibatched_inference(self, deltas: _T, max_variational_batch_size = 0, take_samples = True):
+        Q, M_all, N, D = deltas.shape
         variational_model = self.get_variational_model(N)
 
         I = self.num_variational_samples
@@ -70,41 +71,77 @@ class WorkingMemoryFullSwapModel(Module):
             K_uu_inv_chol = torch.linalg.cholesky(K_uu_inv)
             K_uu_inv = torch.bmm(K_uu_inv_chol, K_uu_inv_chol.transpose(1, 2))
 
-        # Get the KL term of the loss
-        if return_kl:
-            kl_term = variational_model.kl_loss(K_uu = K_uu, K_uu_inv=K_uu_inv)     # [Q]
-        else:
-            kl_term = torch.ones(Q) * torch.nan # Won't plot!
 
         # Make variational inferences for q(f)
-        mus, sigma_chols = [], []
+        mus, sigmas, sigma_chols = [], [], []
         for k_ud, K_dd in zip(k_uds, K_dds):
-            _mu, _sigma, _sigma_chol = variational_model.variational_gp_inference(k_ud=k_ud, K_dd=K_dd, K_uu_inv=K_uu_inv)  # [Q, ~batch*N], [Q, ~batch*N, ~batch*N], [Q, ~batch*N, ~batch*N]
-            mus.append(_mu), sigma_chols.append(_sigma_chol)
+            # [Q, ~batch*N], [Q, ~batch*N, ~batch*N], [Q, ~batch*N, ~batch*N]
+            _mu, _sigma, _sigma_chol = variational_model.variational_gp_inference(k_ud=k_ud, K_dd=K_dd, K_uu_inv=K_uu_inv)
+            mus.append(_mu)
+            sigma_chols.append(_sigma_chol)
+            sigmas.append(_sigma.detach())
+        
+        # For fmse usage
+        with torch.no_grad():
+            mean_surface = torch.concat([
+                variational_model.reinclude_model_evals(mu.unsqueeze(1), M_batch, N, 1).squeeze(1)
+                for mu, M_batch in zip(mus, M_minis)
+            ], dim = 1)    # [Q, M, N]
 
-        # Get the samples of f evaluated at the deltas
-        all_f_samples = [
-            variational_model.reparameterised_sample(num_samples = I, mu = mu, sigma_chol = sigma_chol, M = M, N = N)
-            for mu, sigma_chol, M in zip(mus, sigma_chols, M_minis)
-        ]   # Each of shape [Q, I, ~batchsize, N]
+            std_surface = torch.concat([
+                variational_model.reinclude_model_evals(torch.diagonal(sigma, dim1=-1, dim2=-2).unsqueeze(1), M_batch, N, 1).squeeze(1)
+                for sigma, M_batch in zip(sigmas, M_minis)
+            ], dim = 1)    # [Q, M, N]
 
-        # Shouldn't be any numerical problems after this
-        f_samples = torch.concat(all_f_samples, 2)  # [Q, I, M, N]
+            import pdb; pdb.set_trace(header = 'check sizes and plot')
+
+        if take_samples:
+            # Get the samples of f evaluated at the deltas
+            all_f_samples = [
+                variational_model.reparameterised_sample(num_samples = I, mu = mu, sigma_chol = sigma_chol, M = M, N = N)
+                for mu, sigma_chol, M in zip(mus, sigma_chols, M_minis)
+            ]   # Each of shape [Q, I, ~batchsize, N]
+
+            # Shouldn't be any numerical problems after this
+            f_samples = torch.concat(all_f_samples, 2)  # [Q, I, M, N]
+
+        else:
+            f_samples = None
+
+        return {
+            "mus": mus, "sigmas": sigmas, "sigma_chols": sigma_chols, "f_samples": f_samples,
+            "K_uu": K_uu, "K_uu_inv": K_uu_inv, "K_dds": K_dds, "M_minis": M_minis,
+            "mean_surface": mean_surface, "std_surface": std_surface
+        }
+
+
+    def get_elbo_terms(self, deltas: _T, data: Optional[_T], training_method: str = 'error', max_variational_batch_size = 0, return_kl = True, kwargs_for_individual_component_likelihoods = {}) -> Dict[str, Optional[_T]]:
+
+        Q, M_all, N, D = deltas.shape
+        variational_model = self.get_variational_model(N)
+
+        minibatched_inference_info = self.minibatched_inference(deltas, max_variational_batch_size, True)
 
         prior_info = self.generative_model.swap_function.generate_pi_vectors(
-            set_size = N, model_evaulations = f_samples
+            set_size = N, model_evaulations = minibatched_inference_info.f_samples
         )
         priors = prior_info['pis']
 
+        # Get the KL term of the loss
+        if return_kl:
+            kl_term = variational_model.kl_loss(K_uu = minibatched_inference_info.K_uu, K_uu_inv=minibatched_inference_info.K_uu_inv)     # [Q]
+        else:
+            kl_term = torch.ones(Q) * torch.nan # Won't plot!
+
         # Get the ELBO first term, depending on training mode (data is usually errors)
         if training_method == 'error':
-            assert (Q, M, N) == tuple(data.shape)
+            assert (Q, M_all, N) == tuple(data.shape)
             total_log_likelihood, likelihood_per_datapoint, posterior_vectors = self.generative_model.get_marginalised_log_likelihood(
                 estimation_deviations = data, pi_vectors = priors,
                 kwargs_for_individual_component_likelihoods = kwargs_for_individual_component_likelihoods
             )
         elif training_method == 'beta':
-            raise Exception
+            raise NotImplementedError
             llh_term = self.generative_model.get_component_log_likelihood(
                 selected_components = data, pi_vectors = pi_vectors
             )
@@ -112,16 +149,18 @@ class WorkingMemoryFullSwapModel(Module):
         elif training_method == 'none':
             total_log_likelihood, likelihood_per_datapoint, posterior_vectors = None, None, None
 
-        distance_loss = K_uu.tril(-1).max() / K_uu.max()
+        distance_loss = minibatched_inference_info.K_uu.tril(-1).max() / minibatched_inference_info.K_uu.max()
 
         return {
             'total_log_likelihood': total_log_likelihood, 
             'likelihood_per_datapoint': likelihood_per_datapoint, 
             'posterior': posterior_vectors, 
             'priors': priors, 
-            'f_samples': f_samples,             # [Q, I, M, N]
+            'f_samples': minibatched_inference_info.f_samples,             # [Q, I, M, N]
             'kl_term': kl_term, 
-            'distance_loss': distance_loss
+            'distance_loss': distance_loss,
+            'mean_surface': minibatched_inference_info.mean_surface,
+            'std_surface': minibatched_inference_info.std_surface,
         }
 
     def inference(self, deltas: _T, N_override: Optional[int] = None):
@@ -157,6 +196,18 @@ class WorkingMemoryFullSwapModel(Module):
 
         return mu, sigma, sigma_chol
 
+    def check_Kuu_stability(self, ):
+        for N, variational_model in self.variational_models.items():
+            K_uu = self.generative_model.swap_function.evaluate_kernel(N, variational_model.Z)
+            try:
+                K_uu_inv = torch.linalg.inv(K_uu)
+                K_uu_inv_chol = torch.linalg.cholesky(K_uu_inv)
+            except Exception as e:
+                import pdb; pdb.set_trace(header = "Exception type!")
+                return False
+        return True
+            
+
     def inference_on_grid(self, set_size: int, grid_count: int, device: str = 'cuda') -> Dict[str, _A]:
         """
         Set up a suitably shaped grid and perform inference over it
@@ -180,13 +231,13 @@ class WorkingMemoryFullSwapModel(Module):
         if not variational_model.fix_non_swap:
             raise NotImplementedError
 
-        std_est = torch.stack([fse.diag() for fse in flat_sigma_est], 0).sqrt() # [Q, 100]
+        std_est = torch.diagonal(flat_sigma_est, dim1=-1, dim2=-2).sqrt()
         eps = torch.randn(self.generative_model.num_models, 3, flat_mu_est.shape[1], dtype = flat_mu_est.dtype, device = flat_mu_est.device) # [Q, 3, MN (dedup size)]
         grid_f_samples = flat_mu_est.unsqueeze(1) + torch.bmm(eps, sigma_chol.transpose(-1, -2))   # [Q, 3, MN]
 
         return {
             'one_dimensional_grid': full_grid.cpu().numpy(),            # [Q, 100]
-            'all_grid_points': grid_points.cpu().numpy(),               # [Q, 100, 1]
+            'all_grid_points': grid_points.cpu().numpy(),               # [Q, 100, D]
             'mean_surface': flat_mu_est.cpu().numpy(),                  # [Q, 100]
             'std_surface': std_est.cpu().numpy(),                       # [Q, 100]
             'function_samples_on_grid': grid_f_samples.cpu().numpy()    # [Q, 3, 100]
@@ -194,8 +245,7 @@ class WorkingMemoryFullSwapModel(Module):
 
 
     def visualise_variational_approximation(
-        self, set_size: int, grid_count: int, 
-        pi_u_tildes: _A, pi_1_tildes: _A,
+        self, set_size: int, grid_count: int, pi_u_tildes: _A, pi_1_tildes: _A,
         all_deltas: _A, recent_component_priors: Optional[_A], true_mean_surface: Optional[_A], true_std_surface: Optional[_A],
         min_separation: float, max_separation: float, deltas_label: str
     ):
@@ -224,7 +274,7 @@ class WorkingMemoryFullSwapModel(Module):
         Q = self.num_models
         D = variational_model.num_features
         num_cols = 4 if D == 1 else 5
-        num_rows = Q + 1 if D == 1 else Q
+        num_rows = Q + 1
         fig_surfaces = plt.figure(figsize = (figsize * num_cols, figsize * num_rows))
         figsize = 8
 
@@ -238,10 +288,22 @@ class WorkingMemoryFullSwapModel(Module):
 
         for q in range(Q):
 
+            qth_mean_surface = mean_surface[q]
+            qth_lower_surface, qth_upper_surface = qth_mean_surface - 2 * std_surface[q], qth_mean_surface + 2 * std_surface[q]
+
+            if true_mean_surface is not None:
+                qth_true_mean = true_mean_surface[q]
+                if true_std_surface is not None:
+                    qth_true_std = true_std_surface[q]
+                    qth_true_lower, qth_true_upper = qth_true_mean - 2 * qth_true_std, qth_true_mean + 2 * qth_true_std
+                else:
+                    qth_true_lower, qth_true_upper = float('nan') * qth_true_mean, float('nan') * qth_true_mean
+
+
             # axes1D_exponentiated = fig_surfaces.add_subplot(2,3,2)
-            axes_Suu = fig_surfaces.add_subplot(num_rows,num_cols,q*num_cols+3)
             axes_simplex = fig_surfaces.add_subplot(num_rows,num_cols,q*num_cols+1)
             axes_simplex_no_u = fig_surfaces.add_subplot(num_rows,num_cols,q*num_cols+2)
+            axes_Suu = fig_surfaces.add_subplot(num_rows,num_cols,q*num_cols+3)
 
             if variational_model.inducing_point_variational_parameterisation == 'gaussian':
                 axes_Suu.imshow(all_inducing_points_covars[q], cmap = 'gray')
@@ -253,14 +315,14 @@ class WorkingMemoryFullSwapModel(Module):
 
             if D == 1:
 
-                axes_surface = fig_surfaces.add_subplot(num_rows,num_cols,q*num_cols+1)
                 axes_hist = fig_surfaces.add_subplot(num_rows,num_cols,num_cols*num_rows)
                 axes_hist.hist(all_deltas[:,1:].flatten(), 1024, density=True)
                 axes_hist.set_xlabel(deltas_label)
 
-                surface_color = axes_surface.plot(one_dimensional_grid, mean_surface[q], color = 'blue')[0].get_color()
-                lower_error_surface, upper_error_surface = mean_surface[q] - 2 * std_surface[q], mean_surface[q] + 2 * std_surface[q]
-                axes_surface.fill_between(one_dimensional_grid, lower_error_surface, upper_error_surface, color = surface_color, alpha = 0.2)
+                axes_surface = fig_surfaces.add_subplot(num_rows,num_cols,q*num_cols+4)
+
+                surface_color = axes_surface.plot(one_dimensional_grid, qth_mean_surface, color = 'blue')[0].get_color()
+                axes_surface.fill_between(one_dimensional_grid, qth_lower_surface, qth_upper_surface, color = surface_color, alpha = 0.2)
 
                 sample_colour = lighten_color(surface_color, 1.6)
                 for sample_on_grid in function_samples_on_grid[q]:
@@ -271,12 +333,9 @@ class WorkingMemoryFullSwapModel(Module):
                 axes_surface.plot([-torch.pi, torch.pi], [pi_1_tildes[q].item(), pi_1_tildes[q].item()], surface_color, linewidth = 3)
 
                 if true_mean_surface is not None:
-                    flattened_true_mean = true_mean_surface[q].flatten()
-                    axes_surface.scatter(all_deltas.flatten(), flattened_true_mean, color = 'red', alpha = 0.4, s = 5)
-                    if true_std_surface is not None:
-                        flattened_true_std = true_std_surface[q].flatten()
-                        axes_surface.scatter(all_deltas.flatten(), flattened_true_mean + 2 * flattened_true_std, color = 'red', alpha = 0.01, s = 5)
-                        axes_surface.scatter(all_deltas.flatten(), flattened_true_mean - 2 * flattened_true_std, color = 'red', alpha = 0.01, s = 5)
+                    axes_surface.scatter(all_deltas.flatten(), qth_true_mean.flatten(), color = 'red', alpha = 0.4, s = 5)
+                    axes_surface.scatter(all_deltas.flatten(), qth_true_lower.flatten(), color = 'red', alpha = 0.01, s = 5)
+                    axes_surface.scatter(all_deltas.flatten(), qth_true_upper.flatten(), color = 'red', alpha = 0.01, s = 5)
 
                 for sep in [min_separation, max_separation]:
                     y_bot, y_top = axes_surface.get_ylim()
@@ -285,16 +344,33 @@ class WorkingMemoryFullSwapModel(Module):
                     axes_surface.set_ylim(y_bot, y_top)
                     axes_surface.set_xlim(-torch.pi, torch.pi)
 
+                axes_surface.set_xlabel(deltas_label)
             
             elif D == 2:
 
-        
-        if D == 1:
-            axes_surface.set_xlabel(deltas_label)
+                axes_surface = fig_surfaces.add_subplot(num_rows,num_cols,q*num_cols+4,projection='3d')
+                axes_slide_0 = fig_surfaces.add_subplot(num_rows,num_cols,q*num_cols+5,projection='3d')
+                axes_slide_1 = fig_surfaces.add_subplot(num_rows,num_cols,q*num_cols+6,projection='3d')
 
-        
+                surface_color = axes_surface.plot_surface(all_grid_points[q,:,0], all_grid_points[q,:,1], qth_mean_surface, color='blue')[0].get_color()
+                axes_surface.plot_surface(all_grid_points[q,:,0], all_grid_points[q,:,1], qth_lower_surface, color=surface_color)
+                axes_surface.plot_surface(all_grid_points[q,:,0], all_grid_points[q,:,1], qth_upper_surface, color=surface_color)
 
-        return fig_surfaces
+                axes_surface.scatter(all_inducing_points[q], all_inducing_points_means[q], color = 'black', marker = 'o', s = 20)
+                axes_surface.scatter([0.0], [0.0], [pi_u_tildes[q].item()], color = surface_color, marker='x')
+                axes_surface.scatter([0.0], [0.0], [pi_1_tildes[q].item()], color = surface_color, marker='o')
+
+                if true_mean_surface is not None:
+                    import pdb; pdb.set_trace(header = 'cannot flatten 2D deltas!')
+                    axes_surface.scatter(all_deltas.flatten(), qth_true_mean.flatten(), color = 'red', alpha = 0.4, s = 5)
+                    axes_surface.scatter(all_deltas.flatten(), qth_true_lower.flatten(), color = 'red', alpha = 0.01, s = 5)
+                    axes_surface.scatter(all_deltas.flatten(), qth_true_upper.flatten(), color = 'red', alpha = 0.01, s = 5)
+
+                print('SLICES')
+                print('AXIS LABELS')
+                print('SEPERATIONS')
+
+        return fig_surfaces, num_rows, num_cols
 
     def visualise_pdf_for_example(self, deltas_batch: _T, zeta_targets_batch: _T, theta_count = 360):
         """
@@ -337,85 +413,54 @@ class WorkingMemoryFullSwapModel(Module):
         variational_model = self.get_variational_model(N)
         assert Q == self.num_models and D == variational_model.num_features
         K = self.num_importance_sampling_samples
+        R = variational_model.R
 
         with torch.no_grad():
 
             #### First term - the importance adjusted estimate of joint (numerator of posterior) of shape [Q, M]
 
-            # u^i and q(u^i; \psi)
-            u_samples_and_variational_lh = variational_model.sample_from_variational_prior(K)     # [Q, K, R] and [Q, K]
-            u_samples = u_samples_and_variational_lh['samples']
-            u_variational_llh = u_samples_and_variational_lh['sample_log_likelihoods']
-
-            # p(u^i; \gamma)
-            K_uu = self.generative_model.swap_function.evaluate_kernel(N, variational_model.Z)  # [Q, R, R]
-            K_uu_inv = torch.linalg.inv(K_uu)
-            u_prior_llh = (
-                mathlog((2 * torch.pi)**(-variational_model.R / 2.)) + torch.log(K_uu.det().unsqueeze(-1)**-0.5)             # [Q, 1]   
-                + (-0.5 * (torch.bmm(u_samples, K_uu_inv) * u_samples).sum(-1))                   # [Q, K, R] @ [Q, R, R] -> [Q, K, R] -> [Q, K]
-            )                                                                                   # [Q, K]
-
-            # f^k ~ q (evaluated at Z)
-            all_deduplicated_deltas, M_minis = variational_model.deduplicate_deltas(all_deltas, max_variational_batch_size)                             # "~Mtotal/batch_size length list of entries of shape [Q, ~batch*N, D]"
-            K_dds = [self.generative_model.swap_function.evaluate_kernel(N, deduplicated_deltas) for deduplicated_deltas in all_deduplicated_deltas]                        # each [Q, ~batch*N, ~batch*N]
-            K_uu = self.generative_model.swap_function.evaluate_kernel(N, variational_model.Z)                                                                              # [Q, R, R]
-            k_uds = [self.generative_model.swap_function.evaluate_kernel(N, variational_model.Z, deduplicated_deltas) for deduplicated_deltas in all_deduplicated_deltas]   # each [Q, R, ~batch*N]
-            conditioned_mus, conditioned_sigma_chols = [], []
-            for k_ud, K_dd in zip(k_uds, K_dds):
-                _conditioned_mu, _, _sconditioned_sigma_chol = variational_model.variational_gp_inference_conditioned_on_inducing_points_function(
-                    u=u_samples, k_ud=k_ud, K_dd=K_dd, K_uu_inv=K_uu_inv
-                )  # [Q, K, ~batch*N], [Q, ~batch*N, ~batch*N], [Q, ~batch*N, ~batch*N]
-                conditioned_mus.append(_conditioned_mu), conditioned_sigma_chols.append(_sconditioned_sigma_chol)
-
-            variational_conditioned_f_samples_batched = [
-                variational_model.reparameterised_sample(num_samples = 1, mu = mu, sigma_chol = sigma_chol, M = M, N = N, unsqueeze_mu=False)
-                for mu, sigma_chol, M in zip(conditioned_mus, conditioned_sigma_chols, M_minis)
-            ]   # Each of shape [Q, K, ~batchsize, N]
-            variational_conditioned_f_samples = torch.concat(variational_conditioned_f_samples_batched, 2)   # [Q, K, Mtot, N]
-            
+            # f^k ~ variational posterior
+            # We don't get_elbo_terms becausewe don't want to do self.generative_model.get_marginalised_log_likelihood yet - we do aggregation after the log etc, not before
+            variational_inference_terms = self.minibatched_inference(all_deltas, max_variational_batch_size=max_variational_batch_size, take_samples = True)
+            variational_generated_component_prior_info = self.generative_model.swap_function.generate_pi_vectors(set_size = N, model_evaulations = variational_inference_terms.f_samples, mc_average = False) 
+            variational_generated_component_priors: _T = variational_generated_component_prior_info['pis']                                                  # [Q, K, Mtotal, N+1]
 
             # log p(y | Z, f^i, phi)
             # because we ask for the datasets to be 'combined' we will:
                 # a) automatically calculate this llh estimate on all the data (training data or not)
                 # b) account for two terms in the derivation here
-            variational_conditioned_prior_info = self.generative_model.swap_function.generate_pi_vectors(
-                set_size = N, model_evaulations = variational_conditioned_f_samples, mc_average = False
-            )
-            variational_conditioned_component_priors: _T = variational_conditioned_prior_info['pis']                                    # [Q, K, Mtot, N+1]
-            individual_component_downstream_likelihoods = self.generative_model.error_emissions.individual_component_likelihoods_from_estimate_deviations(
+            individual_component_downstream_likelihoods: _T = self.generative_model.error_emissions.individual_component_likelihoods_from_estimate_deviations(
                 set_size = N, estimation_deviations = all_errors
-            )   # [Q, Mtot, N+1] - p(y[m] | beta[n], Z[m])
-
-            joint_component_and_error_likelihood_variational = individual_component_downstream_likelihoods.unsqueeze(1) * variational_conditioned_component_priors     # [Q, K, Mtot, N+1] - p(y[m] | beta[n], Z[m]) * p(beta[n]| f[k], Z[m]) = p(y[m], beta[n] | f[k], Z[m])
-            variational_conditioned_log_likelihood_per_datapoint = joint_component_and_error_likelihood_variational.sum(-1).log()                           # [Q, K, Mtot]
+            )   # [Q, Mtotal, N+1] - p(y[m] | beta[n], Z[m])
+            joint_component_and_error_likelihood_variational = individual_component_downstream_likelihoods.unsqueeze(1) * variational_generated_component_priors    # [Q, K, Mtot, N+1] - p(y[m] | beta[n], Z[m]) * p(beta[n]| f[k], Z[m]) = p(y[m], beta[n] | f[k], Z[m])
+            variational_conditioned_log_likelihood_per_datapoint = joint_component_and_error_likelihood_variational.sum(-1).log()                                   # [Q, K, Mtot]
 
             # Finally (for this term...), construct the first term of the estimate, which is all an MC estimate
-            variational_log_likelihood_on_train_set: _T = variational_conditioned_log_likelihood_per_datapoint.gather(-1, training_indices.unsqueeze(1).repeat(1, K, 1).to(K_uu.device))     # [Q, K, Mtot] -> [Q, K, M_train]
+            training_indices = training_indices.unsqueeze(1).repeat(1, K, 1).to(variational_generated_component_priors.device)
+            variational_log_likelihood_on_train_set: _T = variational_conditioned_log_likelihood_per_datapoint.gather(-1, training_indices)                 # [Q, K, Mtot] -> [Q, K, M_train]
             assert tuple(variational_log_likelihood_on_train_set.shape) == (Q, K, M_train)
             variational_log_likelihood_on_train_set_total = variational_log_likelihood_on_train_set.sum(-1, keepdim=True)                                   # [Q, K, 1]
-            adjusted_variational_conditioned_log_likelihood_per_datapoint = (
-                (u_prior_llh - u_variational_llh).exp().unsqueeze(-1) * 
-                (variational_conditioned_log_likelihood_per_datapoint + variational_log_likelihood_on_train_set_total)
-            ).mean(1)                                                                                                                                       # [Q, Mtot]
+            adjusted_variational_conditioned_log_likelihood_per_datapoint = (variational_conditioned_log_likelihood_per_datapoint + variational_log_likelihood_on_train_set_total).mean(1)      # [Q, Mtot]
+
 
             #### Second term - the "partition function" of size [Q, 1]
 
-            # f^j ~ p (evaluated at Z)
-            zero_mus = [torch.zeros(K_dd.shape[0], K_dd.shape[1], dtype = K_dd.dtype, device = K_dd.device) for K_dd in K_dds]
+            # g^j ~ GP prior
+            zero_mus = [torch.zeros(K_dd.shape[0], K_dd.shape[1], dtype = K_dd.dtype, device = K_dd.device) for K_dd in variational_inference_terms.K_dds]
             prior_f_samples_batched = [
                 variational_model.reparameterised_sample(num_samples = K, mu = zmu, sigma_chol = torch.linalg.cholesky(K_dd), M = M, N = N)
-                for zmu, K_dd, M in zip(zero_mus, K_dds, M_minis)
-            ]   # Each of shape [Q, K, ~batchsize, N]
-            prior_f_samples = torch.concat(prior_f_samples_batched, 2)           # [Q, K, Mtot, N]
-            prior_conditioned_prior_info = self.generative_model.swap_function.generate_pi_vectors( # [Q, K, Mtot, N+1]
+                for zmu, K_dd, M in zip(zero_mus, variational_inference_terms.K_dds, variational_inference_terms.M_minis)
+            ]                                                                                                                                               # Each of shape [Q, K, ~batchsize, N]
+            prior_f_samples = torch.concat(prior_f_samples_batched, 2)                                                                                      # [Q, K, Mtot, N]
+            prior_conditioned_prior_info = self.generative_model.swap_function.generate_pi_vectors(                                                         # [Q, K, Mtot, N+1]
                 set_size = N, model_evaulations = prior_f_samples, mc_average = False
             )
             prior_conditioned_component_priors = prior_conditioned_prior_info['pis']
 
             # Finally, aggregate to the full model log-evidence under the prior
-            joint_component_and_error_likelihood_prior = individual_component_downstream_likelihoods.unsqueeze(1) * prior_conditioned_component_priors     # [Q, K, Mtot, N+1] - p(y[m] | beta[n], Z[m]) * p(beta[n]| f[k], Z[m]) = p(y[m], beta[n] | f[k], Z[m])
-            prior_conditioned_likelihood_per_datapoint: _T = joint_component_and_error_likelihood_prior.sum(-1)              # [Q, K, Mtot]
-            parition_function = prior_conditioned_likelihood_per_datapoint.mean(1).log().sum(1, keepdim=True) # [Q, K, Mtot] -> [Q, Mtot] -> [Q, 1]
+            joint_component_and_error_likelihood_prior = individual_component_downstream_likelihoods.unsqueeze(1) * prior_conditioned_component_priors      # [Q, K, Mtot, N+1] - p(y[m] | beta[n], Z[m]) * p(beta[n]| f[k], Z[m]) = p(y[m], beta[n] | f[k], Z[m])
+            prior_conditioned_likelihood_per_datapoint: _T = joint_component_and_error_likelihood_prior.sum(-1)                                             # [Q, K, Mtot]
+            parition_function = prior_conditioned_likelihood_per_datapoint.mean(1).log().sum(1, keepdim=True)                                               # [Q, K, Mtot] -> [Q, Mtot] -> [Q, 1]
 
 
         return {

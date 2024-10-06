@@ -8,6 +8,7 @@ monte_carlo_gp_samples: 1024
 flip_augmentation: true
 M_batch: 0
 M_batch_mini: 32
+discard_last_n_training_examples: 0
 distance_loss_weight: 1.0
 distance_loss_threshold: 0.99
 

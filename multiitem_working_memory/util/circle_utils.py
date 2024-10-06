@@ -9,9 +9,9 @@ def rectify_angles(x, scale_lower=-np.pi, scale_upper=np.pi):
     if isinstance(x, _T) and x.names is not None:
         names = x.names
         x = x.rename(None)
-    x_rect = (x + np.pi) % (2 * np.pi) - np.pi
+    x = (x + np.pi) % (2 * np.pi) - np.pi
     scale_ratio = (scale_upper - scale_lower) / (2 * np.pi)
-    ret = (x_rect + np.pi + scale_lower) * scale_ratio
+    ret = (x + np.pi + scale_lower) * scale_ratio
     if isinstance(x, _T):
         ret = ret.rename(*names)
     return ret
