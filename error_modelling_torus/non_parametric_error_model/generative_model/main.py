@@ -94,6 +94,10 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
 
         return cls(num_models, swap_function, error_emissions)
 
+    def reduce_to_single_model(self, model_index: int = 0) -> None:
+        self.num_models = 1
+        self.swap_function.reduce_to_single_model(model_index)
+        self.error_emissions.reduce_to_single_model(model_index)
 
 
     def get_marginalised_log_likelihood(self, estimation_deviations: _T, pi_vectors: _T, kwargs_for_individual_component_likelihoods: dict = {}):
@@ -116,8 +120,10 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
         #import matplotlib.pyplot as plt
         #plt.scatter(estimation_deviations.flatten().detach().cpu().numpy(), individual_component_likelihoods[0,:,1:].flatten().detach().cpu().numpy())
         #plt.savefig('individual_component_likelihoods.png')
-
-        joint_component_and_error_likelihood = individual_component_likelihoods * pi_vectors    # [Q, M, N+1] - p(y[m] | beta[n], Z[m]) * p(beta[n]| Z[m]) = p(y[m], beta[n] | Z[m])
+        try:
+            joint_component_and_error_likelihood = individual_component_likelihoods * pi_vectors    # [Q, M, N+1] - p(y[m] | beta[n], Z[m]) * p(beta[n]| Z[m]) = p(y[m], beta[n] | Z[m])
+        except RuntimeError:
+            joint_component_and_error_likelihood = individual_component_likelihoods * pi_vectors.to(device = individual_component_likelihoods.device)
         likelihood_per_datapoint = joint_component_and_error_likelihood.sum(-1).log()           # [Q, M, N+1] -> [Q, M] -> [Q, M] = log p(y[m] | Z[m])
         total_log_likelihood = likelihood_per_datapoint.sum(-1)                                 # [Q]
 

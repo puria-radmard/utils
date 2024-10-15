@@ -31,7 +31,7 @@ class ConfigNamepace:
     def from_yaml_path(cls, yaml_path) -> ConfigNamepace:
         with open(yaml_path) as f:
             content = yaml.safe_load(f)
-        assert isinstance(content, dict)
+        assert isinstance(content, dict), content
         return cls.from_obj(content)
     
     def update(self, other: ConfigNamepace):
@@ -60,7 +60,7 @@ class ConfigNamepace:
         elif obj_type in iter_types:
             return [ConfigNamepace.to_dict_inner(item) for item in obj]
         elif obj_type == ConfigNamepace:
-            return obj_type.to_dict()
+            return obj.to_dict()
         else:
             raise TypeError(obj_type)
    

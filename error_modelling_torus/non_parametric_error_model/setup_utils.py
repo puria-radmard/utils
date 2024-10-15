@@ -35,7 +35,9 @@ def setup_model_whole(
     resume_path: Optional[str],
     device = 'cuda',
     regenerate_kernel_until_stability: bool = True,
+    **kwargs
 ) -> Tuple[Union[WorkingMemorySimpleSwapModel, WorkingMemoryFullSwapModel], int, List[int]]:
+    
     variational_models, delta_dimensions, D = NonParametricSwapErrorsVariationalModel.from_typical_args(
         num_models = num_models,
         swap_type = swap_type,
@@ -86,9 +88,11 @@ def setup_model_whole(
             this_kernel_stable or (not regenerate_kernel_until_stability)
         )
 
+        failed_attempts += 1
+
     if resume_path is not None:
         map_location=None if device == 'cuda' else torch.device('cpu')
-        parameter_load_path = os.path.join(resume_path, '{model}.{exl}')
+        parameter_load_path = os.path.join(resume_path, '{model}.{ext}')
         swap_model.load_state_dict(torch.load(parameter_load_path.format(model = f'swap_model', ext = 'mdl'), map_location=map_location))
 
         # if (emission_type == 'residual_deltas'):

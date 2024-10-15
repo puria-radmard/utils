@@ -1,8 +1,31 @@
+from __future__ import annotations
+
 import torch
 from torch import nn
 
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
 
+from typing import Union
+
+
+def reduce_to_single_model(module: Union[HolderBase, nn.ModuleDict], model_index: int = 0) -> None:
+    """
+    Downsteam models have helpers registered either as single modules, or module dicts.
+    e.g.:
+
+    self.concentration_holder = (
+        ConcentrationParameterHolder(num_models) if emissions_set_sizes is None
+        else nn.ModuleDict({str(N): ConcentrationParameterHolder(num_models) for N in emissions_set_sizes})
+    )
+
+    This module takes in either type and results after running self.reduce_to_single_model appropriately
+    """
+    if isinstance(module, HolderBase):
+        module.reduce_to_single_model(model_index)
+    else:
+        for v in module.values():
+            v: HolderBase
+            v.reduce_to_single_model(model_index)
 
 
 class HolderBase(nn.Module):
@@ -14,6 +37,11 @@ class HolderBase(nn.Module):
         "In case set size is accessed here, see logic below, e.g. NonParametricSwapErrorsGenerativeModel.inverse_ells!"
         assert isinstance(idx, str)
         return self
+    
+    def reduce_to_single_model(self, model_index: int = 0) -> None:
+        self.num_models = 1
+        for name, param in self.named_parameters():
+            self.register_parameter(name, nn.Parameter(param[[model_index]], requires_grad = True))
 
 
 class KernelParameterHolder(HolderBase):
@@ -24,7 +52,7 @@ class KernelParameterHolder(HolderBase):
         self.num_features = num_features
 
         log_scaler_raw = (1.0 + torch.relu(2.0 + (0.6 * torch.randn([num_models])))).log().to(torch.float64)
-        log_inverse_ells_raw = (1.0 + torch.relu(5.0 + (1.5 * torch.randn([num_models])))).log().to(torch.float64)
+        log_inverse_ells_raw = (1.0 + torch.relu(5.0 + (1.5 * torch.randn([num_models, num_features])))).log().to(torch.float64)
         
         self.register_parameter('log_inverse_ells', nn.Parameter(log_inverse_ells_raw, requires_grad = True))
         self.register_parameter('log_scaler', nn.Parameter(log_scaler_raw, requires_grad = True))

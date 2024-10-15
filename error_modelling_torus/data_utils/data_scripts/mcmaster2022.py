@@ -2,13 +2,14 @@ import torch
 import numpy as np
 from scipy.io import loadmat
 
+import matplotlib.pyplot as plt
+
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
 from purias_utils.error_modelling_torus.data_utils.base import EstimateDataLoaderBase, MultipleSetSizesActivitySetDataGeneratorEnvelopeBase
 
 data_path1 = "/homes/pr450/repos/research_projects/error_modelling_torus/results_link/experimental_data/mcmaster2022/EXP_1__Data.mat"
 data_path2 = "/homes/pr450/repos/research_projects/error_modelling_torus/results_link/experimental_data/mcmaster2022/EXP_2__Data.mat"
-data_array1: dict = loadmat(data_path1)
-data_array2: dict = loadmat(data_path2)
+data_path3 = "/homes/pr450/repos/research_projects/error_modelling_torus/results_link/experimental_data/mcmaster2022/Exp3_data_{loc_type}_locations.npy"
 
 EXPERIMENT_1_SUBTASKS = ['oricue', 'loccue']
 EXPERIMENT_1_SUBJECTS = list(range(10))
@@ -17,6 +18,10 @@ EXPERIMENT_1_ELONGATIONS = ['cue_AR1', 'cue_AR2', 'cue_AR3']   # low, medium, hi
 EXPERIMENT_2_SUBTASKS = ['dircue', 'loccue']
 EXPERIMENT_2_SUBJECTS = list(range(10))
 EXPERIMENT_2_COHERENCES = ['lowC', 'medC', 'highC']   # low, medium, high
+
+EXPERIMENT_3_LOCTYPES = ['rot', 'fix', 'rand']
+EXPERIMENT_3_SUBJECTS = list(range(243))
+
 
 
 class McMaster2022SingleSetSize(EstimateDataLoaderBase):
@@ -97,6 +102,23 @@ class McMaster2022SingleSetSize(EstimateDataLoaderBase):
         super().__init__(all_deltas, all_errors, all_target_zetas, M_batch, M_test, num_repeats, device)
 
 
+class McMaster2022Exp3SingleSetSize(EstimateDataLoaderBase):
+
+    def __init__(self, all_deltas, all_errors, all_target_zetas,  M_batch, M_test, num_repeats, subjects, device, **kwargs):
+
+        self.subjects = subjects
+        all_deltas = torch.tensor(all_deltas, dtype=torch.float32)
+        all_errors = torch.tensor(all_errors, dtype=torch.float32)
+        all_target_zetas = torch.tensor(all_target_zetas, dtype=torch.float32)
+
+        all_deltas[...,1] = rectify_angles(all_deltas[...,1] * 2.)  # orientation
+        all_errors = rectify_angles(2 * all_errors)
+
+        if subjects is None:
+            super().__init__(all_deltas, all_errors, all_target_zetas, M_batch, M_test, num_repeats, device)
+        else:
+            raise NotImplementedError('implement')
+
 
 
 class McMaster2022ExperimentOneEnvelope(MultipleSetSizesActivitySetDataGeneratorEnvelopeBase):
@@ -119,6 +141,8 @@ class McMaster2022ExperimentOneEnvelope(MultipleSetSizesActivitySetDataGenerator
             subjects = EXPERIMENT_1_SUBJECTS
         if (stim_strengths is None):
             stim_strengths = EXPERIMENT_1_ELONGATIONS  # Select all
+
+        data_array1: dict = loadmat(data_path1)
 
         if subtask == 'oricue':
             target_dim_key, probe_dim_key, distractor_target_dim_key = 'L', 'O', 'LwoT'
@@ -157,11 +181,13 @@ class McMaster2022ExperimentTwoEnvelope(MultipleSetSizesActivitySetDataGenerator
 
         assert subtask in EXPERIMENT_2_SUBTASKS
         assert (subjects is None) or (set(subjects).intersection(EXPERIMENT_2_SUBJECTS) == set(subjects))
-        assert (stim_strengths is None) or (set(stim_strengths).intersection(EXPERIMENT_2_COHERENCES) == set(stim_strengths))
+        assert (stim_strengths is None) or (set(stim_strengths).intersection(EXPERIMENT_2_COHERENCES) == set(stim_strengths)), EXPERIMENT_2_COHERENCES
         if (subjects is None):
             subjects = EXPERIMENT_2_SUBJECTS
         if (stim_strengths is None):
             stim_strengths = EXPERIMENT_2_COHERENCES  # Select all
+
+        data_array2: dict = loadmat(data_path2)
 
         if subtask == 'dircue':
             target_dim_key, probe_dim_key, distractor_target_dim_key = 'L', 'D', 'L_reshape'
@@ -179,6 +205,21 @@ class McMaster2022ExperimentTwoEnvelope(MultipleSetSizesActivitySetDataGenerator
 
         super().__init__(M_batch, feature_names, data_generators, device)
 
+
+
+class McMaster2022ExperimentThreeEnvelope(MultipleSetSizesActivitySetDataGeneratorEnvelopeBase):
+
+    D = 2
+
+    def __init__(self, *_, loc_type, M_batch, M_test, num_repeats: int, subjects = None, device = 'cuda'):
+
+        data_array2: dict = np.load(data_path3.format(loc_type=loc_type), allow_pickle=True).item()
+
+        data_generators = {6: McMaster2022Exp3SingleSetSize(**data_array2, M_batch=M_batch, M_test=M_test, num_repeats=num_repeats, subjects=subjects, device=device)}
+
+        feature_names = ['location', 'orientation']
+
+        super().__init__(M_batch, feature_names, data_generators, device)
 
 
 

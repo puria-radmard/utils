@@ -86,6 +86,13 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             # # else:
                 self.register_parameter('S_uu_log_chol', nn.Parameter(torch.zeros(num_models, self.R, self.R, dtype = torch.float64), requires_grad = True))    # [Q, R (always), R]
 
+    def reduce_to_single_model(self, model_index: int = 0) -> None:
+        self.num_models = 1
+        self.register_parameter('inducing_points_tilde', nn.Parameter(self.inducing_points_tilde[[model_index]], requires_grad = not self.fix_inducing_point_locations))
+        self.register_parameter('m_u_raw', nn.Parameter(self.m_u_raw[[model_index]], requires_grad = True))
+        if self.inducing_point_variational_parameterisation == 'gaussian':
+            self.register_parameter('S_uu_log_chol', nn.Parameter(self.S_uu_log_chol[[model_index]], requires_grad = True)) 
+
     @classmethod
     def from_typical_args(
         cls, *_, 
@@ -115,7 +122,7 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         if swap_type == 'spike_and_slab':
             return None, ..., 0
 
-        delta_dimensions = [0] if swap_type == 'cue_dim_only' else [1] if swap_type == 'est_dim_only' else ...
+        delta_dimensions = [0] if swap_type == 'cue_dim_only' else [1] if swap_type == 'est_dim_only' else [0, 1]
         D = 1 if swap_type in ['cue_dim_only', 'est_dim_only'] else 2
 
         set_sizes = [0] if shared_swap_function else all_set_sizes
@@ -190,8 +197,6 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             return torus_points
 
     def to(self, *args, **kwargs):
-        if self.fix_inducing_point_locations:
-            self.inducing_points_tilde = self.inducing_points_tilde.to(*args, **kwargs)
         return super().to(*args, **kwargs)
 
     @property
@@ -226,7 +231,7 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         else:
             chol = torch.tril(self.S_uu_log_chol)
             diag_index = range(self.R)
-            chol[:, diag_index, diag_index] = chol[:,diag_index, diag_index].exp()           # [Q, R, R]  
+            chol[:, diag_index, diag_index] = 1.0 + chol[:,diag_index, diag_index].exp()           # [Q, R, R]  
             return chol      
 
     @property
@@ -235,7 +240,7 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
             return 0.0
 
         else:
-            chol = self.S_uu_chol 
+            chol = self.S_uu_chol
             S_uu = torch.bmm(chol, chol.transpose(1, 2))
             return S_uu
     
@@ -296,16 +301,15 @@ class NonParametricSwapErrorsVariationalModel(nn.Module):
         if self.inducing_point_variational_parameterisation == 'vanilla':
             warnings.warn('kl loss for self.inducing_point_variational_parameterisation = vanilla not evaluated')
             return torch.tensor(0.0)
+        Suu_chol = self.S_uu_chol
         S_uu = self.S_uu                                                # [Q, R, R]
         assert K_uu.shape == S_uu.shape == K_uu_inv.shape
-        det_S_uu: _T = torch.linalg.det(S_uu)                           # [Q]
-        det_K_uu: _T = torch.linalg.det(K_uu)                           # [Q]
-        det_term = (det_K_uu / det_S_uu).log()                          # [Q]
+        log_det_S_uu = 2 * torch.diagonal(Suu_chol, dim1=-1, dim2=-2).log().sum(-1)                           # [Q]
+        log_det_K_uu: _T = torch.logdet(K_uu)                           # [Q]
+        log_det_term = (log_det_K_uu - log_det_S_uu)                          # [Q]
         trace_term = torch.diagonal(torch.bmm(K_uu_inv, S_uu), offset=0, dim1=-1, dim2=-2).sum(-1)  # [Q]
         mu_term = self.batched_inner_product(K_uu_inv, self.m_u)        # [Q]
-        kl_term = 0.5 * (det_term + trace_term + mu_term - self.R)      # [Q]
-        if kl_term.isnan().any():
-            import pdb; pdb.set_trace()
+        kl_term = 0.5 * (log_det_term + trace_term + mu_term - self.R)      # [Q]
         return kl_term
 
     def variational_gp_inference(self, k_ud: _T, K_dd: _T, K_uu_inv: _T):

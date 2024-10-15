@@ -5,16 +5,18 @@ from torch import Tensor as _T
 import numpy as np
 from numpy import ndarray as _A
 
-from typing import Dict
+from typing import Dict, Union
 
-from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.helpers import KernelParameterHolder, PiTildeHolder
+from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.helpers import KernelParameterHolder, PiTildeHolder, reduce_to_single_model
 
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
+
+from abc import abstractmethod, ABC
 
 GROUPING_THRES = 1e-3
 
 
-class SwapFunctionBase(nn.Module):
+class SwapFunctionBase(nn.Module, ABC):
 
     def __init__(self, num_models: int, function_set_sizes: list, remove_uniform: bool, include_pi_u_tilde: bool, normalisation_inner: str) -> None:
         super().__init__()
@@ -27,6 +29,10 @@ class SwapFunctionBase(nn.Module):
 
         if include_pi_u_tilde:
             assert not self.remove_uniform, "Cannot remove uniform (remove_uniform) while specifying a learnable uniform pre-softmax (include_pi_u_tilde)!"
+
+    @abstractmethod
+    def reduce_to_single_model(self, model_index: int = 0) -> None:
+        raise NotImplementedError
 
     def normalisation_inner(self, x: _T) -> _T:
         if self.normalisation_inner_function == 'exp':
@@ -66,12 +72,15 @@ class SwapFunctionBase(nn.Module):
         selected_components = (u > prob_cum).sum(-1)                    # [Q, M, N+1] -> [Q, M]
         return selected_components                              # [Q, M]
 
+    @abstractmethod
     def generate_pi_vectors(self, set_size: int) -> Dict[str, _T]:    # [Q, M, N+1]
         raise NotImplementedError
 
+    @abstractmethod
     def evaluate_kernel(self, set_size: int, data_1: _T, data_2: _T = None) -> _T:
         raise NotImplementedError
 
+    @abstractmethod
     def evaluate_kernel_inner(self, differences_matrix: _T) -> _T:
         raise NotImplementedError
 
@@ -102,6 +111,8 @@ class NonParametricSwapFunctionBase(SwapFunctionBase):
     Original delta calculation, where cued item is 'removed' without noise!
     """
 
+    kernel_holder: Union[KernelParameterHolder, nn.ModuleDict]
+
     def __init__(self, num_models: int, num_features: int, kernel_set_sizes: list, remove_uniform: bool, include_pi_u_tilde: bool, fix_non_swap: bool, include_pi_1_tilde: bool, normalisation_inner: bool) -> None:
         super().__init__(num_models, kernel_set_sizes, remove_uniform, include_pi_u_tilde, normalisation_inner)
 
@@ -120,6 +131,14 @@ class NonParametricSwapFunctionBase(SwapFunctionBase):
                 PiTildeHolder(2.0, num_models) if kernel_set_sizes is None 
                 else nn.ModuleDict({str(N): PiTildeHolder(2.0, num_models) for N in kernel_set_sizes})
             )
+
+    def reduce_to_single_model(self, model_index: int = 0) -> None:
+        self.num_models = 1
+        reduce_to_single_model(self.kernel_holder, model_index)
+        if self.include_pi_u_tilde:
+            reduce_to_single_model(self.pi_u_tilde_holder, model_index)
+        if self.include_pi_1_tilde:
+            reduce_to_single_model(self.pi_1_tilde_holder, model_index)
     
     def generate_pi_vectors(self, set_size: int, model_evaulations: _T, make_spike_and_slab = False, mc_average = True) -> Dict[str, _T]:
         """
@@ -129,6 +148,7 @@ class NonParametricSwapFunctionBase(SwapFunctionBase):
             OR [Q, I or K, M, N+1] if choosing not to perform the MC average
         """
         Q, I, M, N = model_evaulations.shape
+        assert Q == self.num_models
         exp_pi_u_tilde = self.generate_exp_pi_u_tilde(set_size, I, M, model_evaulations.dtype, model_evaulations.device)    # [Q, I, M, 1]
         exp_grid = torch.concat([exp_pi_u_tilde, model_evaulations.exp()], dim=-1)          # [Q, I, M, N+1]
         if self.fix_non_swap:
@@ -157,7 +177,7 @@ class NonParametricSwapFunctionBase(SwapFunctionBase):
         """
 
         Q, N1, D1 = data_1.shape   # NB: N1 != setsize here!
-        assert Q == self.num_models
+        assert Q == self.num_models, f"Data passed has shape {data_1.shape} - the first axis should have length num_models ({self.num_models})"
 
         if data_2 is None:
             sigma = self.kernel_holder[str(set_size)].kernel_noise_sigma    # 
@@ -223,6 +243,8 @@ class SpikeAndSlabSwapFunction(SwapFunctionBase):
             PiTildeHolder(1.0, num_models) if logits_set_sizes is None 
             else nn.ModuleDict({str(N): PiTildeHolder(1.0, num_models) for N in logits_set_sizes})
         )
+        if logits_set_sizes is not None and 1 in logits_set_sizes:
+            self.pi_swap_tilde_holder.pop('1')
 
         if include_pi_u_tilde:
             self.pi_u_tilde_holder = (
@@ -236,19 +258,35 @@ class SpikeAndSlabSwapFunction(SwapFunctionBase):
                 else nn.ModuleDict({str(N): PiTildeHolder(2.0, num_models) for N in logits_set_sizes})
             )
 
+    def evaluate_kernel(self, set_size: int, data_1: _T, data_2: _T = None) -> _T:
+        raise TypeError('SpikeAndSlabSwapFunction has no kernel!')
+
+    def evaluate_kernel_inner(self, differences_matrix: _T) -> _T:
+        raise TypeError('SpikeAndSlabSwapFunction has no kernel!')
+
+    def reduce_to_single_model(self, model_index: int = 0) -> None:
+        self.num_models = 1
+        reduce_to_single_model(self.pi_swap_tilde_holder, model_index)
+        if self.include_pi_u_tilde:
+            reduce_to_single_model(self.pi_u_tilde_holder, model_index)
+        if self.include_pi_1_tilde:
+            reduce_to_single_model(self.pi_1_tilde_holder, model_index)
+
     def generate_exp_pi_swap_tilde(self, set_size, I: int, M: int, dtype, device): # [Q, I, M, N-1]
-        pi_swap_tilde = self.pi_swap_tilde_holder[str(set_size)].pi_tilde.reshape(-1, 1, 1, 1).repeat(1, I, M, set_size - 1)
+        if set_size == 1:
+            pi_swap_tilde = torch.empty(self.num_models, I, M, 0)
+        else:
+            pi_swap_tilde = self.pi_swap_tilde_holder[str(set_size)].pi_tilde.reshape(-1, 1, 1, 1).repeat(1, I, M, set_size - 1)
         exp_pi_swap_tilde = self.normalisation_inner(pi_swap_tilde)
         return exp_pi_swap_tilde.to(device=device, dtype=dtype)
 
-    def generate_pi_vectors(self, set_size: int, batch_size: int) -> Dict[str, _T]:
+    def generate_pi_vectors(self, set_size: int, batch_size: int, device = 'cuda') -> Dict[str, _T]:
         """
         Output is of shape [Q, M, N+1], where output[q,0,:,n] is the same for all data
         """
-        exp_pi_swap_tilde = self.generate_exp_pi_swap_tilde(set_size, 1, 1, device=None, dtype=None)   # [Q, 1, M, N-1]
+        exp_pi_swap_tilde = self.generate_exp_pi_swap_tilde(set_size, 1, 1, device=device, dtype=None)   # [Q, 1, M, N-1]
         exp_pi_u_tilde = self.generate_exp_pi_u_tilde(set_size, 1, 1, device=exp_pi_swap_tilde.device, dtype=exp_pi_swap_tilde.dtype)   # [Q, 1, M, 1]
         exp_pi_1_tilde = self.generate_exp_pi_1_tilde(set_size, 1, 1, device=exp_pi_swap_tilde.device, dtype=exp_pi_swap_tilde.dtype)   # [Q, 1, M, 1]
-
         exp_grid = torch.concat([exp_pi_u_tilde, exp_pi_1_tilde, exp_pi_swap_tilde], dim = -1).squeeze(1)  # [Q, 1, 1, N+1] -> [Q, 1, N+1]
         exp_grid = exp_grid.repeat(1, batch_size, 1)                                         # [Q, M, N+1]
         denominator = exp_grid.sum(-1, keepdim=True)                                            # [Q, M, 1]

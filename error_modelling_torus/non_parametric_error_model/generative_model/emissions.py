@@ -11,16 +11,18 @@ import numpy as np
 from torch.distributions import Dirichlet, VonMises, Cauchy, Uniform
 from torch.distributions.von_mises import _log_modified_bessel_fn
 
-from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.helpers import *
+from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.helpers import reduce_to_single_model, ConcentrationParameterHolder, DoubleConcentrationParameterHolder, StableAlphaHolder, StableGammaHolder
 
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
+
+from abc import abstractmethod, ABC
 
 
 VALID_EMISSION_TYPES = ['von_mises', 'wrapped_cauchy', 'wrapped_stable', 'uniform']
 
 
 
-class ErrorsEmissionsBase(nn.Module):
+class ErrorsEmissionsBase(nn.Module, ABC):
 
     """
     Universal indices:
@@ -37,6 +39,11 @@ class ErrorsEmissionsBase(nn.Module):
         self.num_models = num_models                    # Q
         self.emissions_set_sizes = emissions_set_sizes  # list of N
 
+    @abstractmethod
+    def reduce_to_single_model(self, model_index: int = 0) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
     def generate_samples(self, comp_means: _T, set_size: int, model_index: int, **kwargs):
         """
             comp_means of shape [X, N], where X doesn't matter, and N is set size
@@ -81,6 +88,7 @@ class ErrorsEmissionsBase(nn.Module):
             )[0,:,1]
         return theta_axis.cpu().numpy(), likelihood.cpu().numpy()
 
+    @abstractmethod
     def individual_component_likelihoods_from_estimate_deviations(self, set_size: int, estimation_deviations: _T, **kwargs) -> _T:
         raise NotImplementedError
 
@@ -88,6 +96,7 @@ class ErrorsEmissionsBase(nn.Module):
 
 class ParametricErrorsEmissionsBase(ErrorsEmissionsBase):
 
+    @abstractmethod
     def emission_parameter(self, set_size):
         raise NotImplementedError
 
@@ -120,6 +129,10 @@ class VonMisesParametricErrorsEmissions(ParametricErrorsEmissionsBase):
             ConcentrationParameterHolder(num_models) if emissions_set_sizes is None
             else nn.ModuleDict({str(N): ConcentrationParameterHolder(num_models) for N in emissions_set_sizes})
         )
+
+    def reduce_to_single_model(self, model_index: int = 0) -> None:
+        self.num_models = 1
+        reduce_to_single_model(self.concentration_holder, model_index)
     
     def emission_parameter(self, set_size):
         return self.concentration_holder[str(set_size)].concentration.unsqueeze(-1)
@@ -153,6 +166,11 @@ class WrappedStableParametricErrorsEmissions(ParametricErrorsEmissionsBase):
             StableGammaHolder(num_models) if emissions_set_sizes is None
             else nn.ModuleDict({str(N): StableGammaHolder(num_models) for N in emissions_set_sizes})
         )
+
+    def reduce_to_single_model(self, model_index: int = 0) -> None:
+        self.num_models = 1
+        reduce_to_single_model(self.alpha_stability_holder, model_index)
+        reduce_to_single_model(self.gamma_scale_holder, model_index)
 
     def emission_parameter(self, set_size):
         return torch.stack([self.alpha_stability_holder[str(set_size)].alpha, self.gamma_scale_holder[str(set_size)].gamma], -1)   # [Q, 2]
@@ -221,6 +239,10 @@ class DoubleVonMisesParametricErrorsEmissions(ParametricErrorsEmissionsBase):
         super().__init__(num_models, emissions_set_sizes)
         assert emissions_set_sizes is None, "DoubleVonMisesParametricErrorsEmissions current not meant to be used for N > 1"
         self.double_conc_holder = DoubleConcentrationParameterHolder(num_models)
+
+    def reduce_to_single_model(self, model_index: int = 0) -> None:
+        self.num_models = 1
+        reduce_to_single_model(self.double_conc_holder, model_index)
 
     def emission_parameter(self, set_size):
         concentrations = self.double_conc_holder[str(set_size)].concentrations   # [Q], [Q]

@@ -1,5 +1,7 @@
 import os, time
 from collections import deque
+from numpy import ndarray as _A
+
 
 class bcolors:
     HEADER = '\033[95m'
@@ -105,4 +107,59 @@ class LoopTimer:
         remaining_string = time_to_string(average_loop_time * (self.total_loops - self.num_loops))
         return elapsed_string, remaining_string
 
+
+
+class EarlyStopper:
+
+    """
+    This item "watches" an arbitrary number of arrays of shape [total_timesteps, ...],
+        treating each of the sequences (...) as indiviudal sequences
+    """
+
+    allowed_policies = {
+        'parameter', 'performance', 'loss'
+    }
+
+    def __init__(self, total_timesteps: int, window: int = 500) -> None:
+        self.arrays = []
+        self.policies = []
+        self.window = window
+        self.total_timesteps = total_timesteps
+
+    def watch(self, new_array: _A, new_policy: str) -> None:
+        """
+        Add to items that feed into decision
+        """
+        assert new_array.shape[0] == self.total_timesteps
+        assert new_policy in self.allowed_policies
+        self.arrays.append(new_array)
+        self.policies.append(new_policy)
+
+    def check_array(self, index: int, time_step: int) -> bool:
+        """
+        True = self.arrays[index] has fulfilled self.policies[index]
+            and based on this we should stop!
+        """
+        if time_step < self.window:
+            return False
+
+        return False
+
+        relevant_subarray = self.arrays[time_step+1-self.window:time_step+1]
+        policy = self.policies[index]
+
+        if policy == 'parameter':
+            import pdb; pdb.set_trace()
+        elif policy == 'performance':
+            import pdb; pdb.set_trace()
+        elif policy == 'loss':
+            raise NotImplementedError
+
+        return decision
+
+    def advise(self, time_step: int) -> bool:
+        """
+        True = we should stop!
+        """
+        return all([self.check_array(i, time_step) for i in range(len(self.arrays))])
 

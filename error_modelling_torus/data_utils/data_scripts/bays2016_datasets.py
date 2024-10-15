@@ -36,7 +36,14 @@ class DatasetsUsedInBays2016SingleSetSize(EstimateDataLoaderBase):
         #subject_selected_target_zetas = subject_selected_target_zetas[~np.isnan(subject_selected_target_zetas).any(axis = 0)]
         #subject_selected_errors = subject_selected_errors[~np.isnan(subject_selected_errors).any(axis = 0)]
 
-        assert not (np.isnan(subject_selected_deltas).any() or np.isnan(subject_selected_target_zetas).any() or np.isnan(subject_selected_errors).any())
+        if (np.isnan(subject_selected_deltas).any() or np.isnan(subject_selected_target_zetas).any() or np.isnan(subject_selected_errors).any()):
+            assert (np.isnan(subject_selected_deltas).any(-1).any(-1) == np.isnan(subject_selected_target_zetas).any(-1).any(-1)).all()
+            assert (np.isnan(subject_selected_deltas).any(-1).any(-1) == np.isnan(subject_selected_errors).any(-1)).all()
+
+            mask = ~np.isnan(subject_selected_deltas).any(-1).any(-1)
+            subject_selected_deltas = subject_selected_deltas[mask]
+            subject_selected_target_zetas = subject_selected_target_zetas[mask]
+            subject_selected_errors = subject_selected_errors[mask]
 
         all_deltas = torch.tensor(subject_selected_deltas, device = device)    # [M, N, D (2)]
         all_target_zetas = torch.tensor(subject_selected_target_zetas, device = device)    # [M, N, 1]
@@ -110,6 +117,7 @@ class VanDenBerg2012OrientationEnvelope(DatasetsUsedInBays2016Envelope):
 
 
 class Bays2014OrientationEnvelope(DatasetsUsedInBays2016Envelope):
+    D = 2
     dataset_idx = 5
     estimated_feature_name = 'orientation'
     

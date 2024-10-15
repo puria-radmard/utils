@@ -11,7 +11,7 @@ from typing import List, Dict, Optional, Union
 class EstimateDataLoaderBase(ABC):
 
     """
-    self.all_deltas of shape [M, N, D] and duplicated to [Q, M, N, D] upon loading
+    self.all_deltas of shape [M, N, D] in storage, but stacked to [Q, Mbatch/Mtrain/Mtest, N, D] upon loading
     self.all_errors of shape [Q, M, N], which is already duplicated for real data, but makes it possible to swap out for synthetic data
     self.all_target_zetas of shape [M, N, 1]
 
@@ -25,8 +25,8 @@ class EstimateDataLoaderBase(ABC):
     test_indices: _T        # [Q, M_test]
 
     def __init__(self, all_deltas: _T, all_errors: _T, all_target_zetas: _T, M_batch: int, M_test: Union[int, float], num_repeats: int, device: str) -> None:
-        num_examples, self.set_size, self.features = all_deltas.shape
         
+        num_examples, self.set_size, self.features = all_deltas.shape
         assert tuple(all_errors.shape) == (num_examples, self.set_size)
         assert tuple(all_target_zetas.shape) == (num_examples, self.set_size, 1)
 
