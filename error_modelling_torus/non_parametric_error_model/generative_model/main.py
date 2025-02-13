@@ -2,11 +2,11 @@
 import torch
 from torch import nn
 from torch import Tensor as _T
-from torch.distributions import Dirichlet
+from torch.nn import ModuleDict
 
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
 
-from typing import Optional, Dict, List, Literal
+from typing import Optional, Dict, List, Any
 
 
 from purias_utils.error_modelling_torus.non_parametric_error_model.generative_model.emissions import ErrorsEmissionsBase, VonMisesParametricErrorsEmissions, WrappedStableParametricErrorsEmissions, DoubleVonMisesParametricErrorsEmissions
@@ -57,6 +57,7 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
         trainable_kernel_delta: bool,
         num_features: int,
         device = 'cuda',
+        error_emissions_keys: Optional[List[Any]],
         **kwargs
     ):
         """
@@ -90,17 +91,23 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
             ).to(device)
 
         EmissionsClass = EMISSION_TYPE_CLASSES[emission_type]
-        error_emissions = EmissionsClass(num_models, emission_set_sizes)
+
+        if error_emissions_keys is None:
+            error_emissions = EmissionsClass(num_models, emission_set_sizes)
+        else:
+            error_emissions = {smk: EmissionsClass(num_models, emission_set_sizes) for smk in error_emissions_keys}
 
         return cls(num_models, swap_function, error_emissions)
 
     def reduce_to_single_model(self, model_index: int = 0) -> None:
         self.num_models = 1
         self.swap_function.reduce_to_single_model(model_index)
-        self.error_emissions.reduce_to_single_model(model_index)
+        try:
+            self.error_emissions.reduce_to_single_model(model_index)
+        except AttributeError:
+            pass
 
-
-    def get_marginalised_log_likelihood(self, estimation_deviations: _T, pi_vectors: _T, kwargs_for_individual_component_likelihoods: dict = {}):
+    def get_marginalised_log_likelihood(self, estimation_deviations: _T, pi_vectors: _T, kwargs_for_individual_component_likelihoods: dict = {}, *_, _error_emissions_obj: Optional[ErrorsEmissionsBase] = None):
         """
         This is the first term of the ELBO when training on the estimates
 
@@ -112,8 +119,11 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
 
         Also do infernce built in, given that it's cheap -> posteriors shaped [Q, M, N+1]
         """
+        if _error_emissions_obj is None:
+            _error_emissions_obj = self.error_emissions
+
         set_size = estimation_deviations.shape[-1]
-        individual_component_likelihoods = self.error_emissions.individual_component_likelihoods_from_estimate_deviations(
+        individual_component_likelihoods = _error_emissions_obj.individual_component_likelihoods_from_estimate_deviations(
             set_size, estimation_deviations, **kwargs_for_individual_component_likelihoods
         )   # [Q, M, N+1] - p(y[m] | beta[n], Z[m])
         
@@ -150,18 +160,33 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
             b = selected_components[m]
             selected_pis[:,m] = pi_vectors[:,m,b]
         return selected_pis.mean(0).log().sum()
+    
+    def data_generation_from_component_priors(self, set_size: int, vm_means: _T, component_priors: _T, kwargs_for_sample_betas: dict = {}, kwargs_for_sample_from_components: dict = {}, *_, _error_emissions_obj: Optional[ErrorsEmissionsBase]):
+        """
+        vm_means is basically zeta_recalled: [M, N]
+        component_priors are [Q, M, N+1]
+        """
+        if _error_emissions_obj is None:
+            _error_emissions_obj = self.error_emissions
 
-    def full_data_generation(self, set_size: int, vm_means: _T, kwargs_for_generate_pi_vectors: dict = {}, kwargs_for_sample_betas: dict = {}, kwargs_for_sample_from_components: dict = {}):
+        betas = self.swap_function.sample_betas(component_priors, **kwargs_for_sample_betas)
+        samples = _error_emissions_obj.sample_from_components(set_size, betas, vm_means, **kwargs_for_sample_from_components)
+        return {'pi_vectors': component_priors, 'betas': betas, 'samples': samples}
+
+    def full_data_generation(self, set_size: int, vm_means: _T, kwargs_for_generate_pi_vectors: dict = {}, kwargs_for_sample_betas: dict = {}, kwargs_for_sample_from_components: dict = {}, *_, _error_emissions_obj: Optional[ErrorsEmissionsBase]):
         """
         vm_means is basically zeta_recalled: [M, N]
         """
+        if _error_emissions_obj is None:
+            _error_emissions_obj = self.error_emissions
+
         with torch.no_grad():
             prior_info = self.swap_function.generate_pi_vectors(set_size=set_size, **kwargs_for_generate_pi_vectors)
             betas = self.swap_function.sample_betas(prior_info['pis'], **kwargs_for_sample_betas)
-            samples = self.error_emissions.sample_from_components(set_size, betas, vm_means, **kwargs_for_sample_from_components)
+            samples = _error_emissions_obj.sample_from_components(set_size, betas, vm_means, **kwargs_for_sample_from_components)
         return {'exp_grid': prior_info['exp_grid'], 'pi_vectors': prior_info['pis'], 'betas': betas, 'samples': samples}
 
-    def empirical_residual_distribution_weights(self, posterior_vectors: _T, estimation_deviations: _T, kwargs_for_individual_component_likelihoods: Optional[dict] = {}):
+    def empirical_residual_distribution_weights(self, posterior_vectors: _T, estimation_deviations: _T, kwargs_for_individual_component_likelihoods: dict = {}, *_, _error_emissions_obj: Optional[ErrorsEmissionsBase]):
         """
         posterior_vectors: [Q, M, N+1] - p(beta[n] | y[m], Z[m])       (f samples already factored out)
         estimation_deviations: [Q, M, N] - rectify(estimates - zeta_c)
@@ -172,6 +197,9 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
         
         XXX -- NB: division by M not done here for some reason... TODO: downstream debug!
         """
+        if _error_emissions_obj is None:
+            _error_emissions_obj = self.error_emissions
+
         particle_weights_non_uniform = posterior_vectors[...,1:].detach() # posterior_vectors [Q, M, N]
         set_size = estimation_deviations.shape[-1]
         with torch.no_grad():
@@ -180,7 +208,7 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
                 dense_grid = torch.linspace(-torch.pi, +torch.pi, 5 * estimation_deviations[0].numel(), device = estimation_deviations.device).unsqueeze(0).repeat(self.num_models, 1) # [Q, many]
                 grid_point_distance = dense_grid[0,1] - dense_grid[0,0]
 
-                error_lhs: _T = self.error_emissions.individual_component_likelihoods_from_estimate_deviations_inner(set_size, dense_grid, **kwargs_for_individual_component_likelihoods)   # [Q, many]
+                error_lhs: _T = _error_emissions_obj.individual_component_likelihoods_from_estimate_deviations_inner(set_size, dense_grid, **kwargs_for_individual_component_likelihoods)   # [Q, many]
                 error_lhs = error_lhs / (grid_point_distance * error_lhs).sum(-1, keepdim=True)     # basically 1
                 error_lhs = grid_point_distance * error_lhs
                 
@@ -217,5 +245,205 @@ class NonParametricSwapErrorsGenerativeModel(nn.Module):
             "particle_weights_uniform": particle_weights_uniform,
             "particle_weights_total": set_size * (particle_weights_non_uniform + particle_weights_uniform),
         }
+
+
+
+
+class MultipleErrorEmissionsNonParametricSwapErrorsGenerativeModel(NonParametricSwapErrorsGenerativeModel):
+
+    def __init__(self, num_models: int, swap_function: SwapFunctionBase, error_emissions_dict: Dict[Any, ErrorsEmissionsBase]) -> None:
+        super(NonParametricSwapErrorsGenerativeModel, self).__init__()
+
+        self.num_models = num_models
+        self.swap_function = swap_function
+        self.error_emissions: Dict[str, ErrorsEmissionsBase] = ModuleDict(
+            {str(k): v for k, v in error_emissions_dict.items()}
+        )
+        assert all([num_models == swap_function.num_models == ee.num_models for ee in self.error_emissions.values()])
+
+        self.error_emissions_keys = list(error_emissions_dict.keys())
+
+        if (self.swap_function.function_set_sizes is not None) and (self.get_error_emissions(self.error_emissions_keys[0]).emissions_set_sizes is not None):
+            for ee in self.error_emissions.values():
+                assert self.swap_function.function_set_sizes == ee.emissions_set_sizes
+
+    def get_error_emissions(self, key: Any):
+        return self.error_emissions[str(key)]
+
+    def reduce_to_single_model(self, model_index: int = 0) -> None:
+        self.num_models = 1
+        self.swap_function.reduce_to_single_model(model_index)
+        try:
+            [ee.reduce_to_single_model(model_index) for ee in self.error_emissions.values()]
+        except AttributeError:
+            pass
+
+    def get_marginalised_log_likelihood(self, error_emissions_key: Any, estimation_deviations: _T, pi_vectors: _T, kwargs_for_individual_component_likelihoods: dict = {}):
+        error_emissions = self.get_error_emissions(error_emissions_key)
+        return super(MultipleErrorEmissionsNonParametricSwapErrorsGenerativeModel, self).get_marginalised_log_likelihood(
+            estimation_deviations=estimation_deviations,
+            pi_vectors=pi_vectors,
+            kwargs_for_individual_component_likelihoods=kwargs_for_individual_component_likelihoods,
+            _error_emissions_obj=error_emissions
+        )
+
+    def data_generation_from_component_priors(self, error_emissions_key: Any, set_size: int, vm_means: _T, component_priors: _T, kwargs_for_sample_betas: dict = {}, kwargs_for_sample_from_components: dict = {}):
+        error_emissions = self.get_error_emissions(error_emissions_key)
+        return super(MultipleErrorEmissionsNonParametricSwapErrorsGenerativeModel, self).data_generation_from_component_priors(
+            set_size = set_size,
+            vm_means = vm_means,
+            component_priors = component_priors,
+            kwargs_for_sample_betas = kwargs_for_sample_betas,
+            kwargs_for_sample_from_components = kwargs_for_sample_from_components,
+            _error_emissions_obj=error_emissions
+        )
+
+    def full_data_generation(self, error_emissions_key: Any, set_size: int, vm_means: _T, kwargs_for_generate_pi_vectors: dict = {}, kwargs_for_sample_betas: dict = {}, kwargs_for_sample_from_components: dict = {}):
+        error_emissions = self.get_error_emissions(error_emissions_key)
+        return super(MultipleErrorEmissionsNonParametricSwapErrorsGenerativeModel, self).full_data_generation(
+            set_size = set_size,
+            vm_means = vm_means,
+            kwargs_for_generate_pi_vectors = kwargs_for_generate_pi_vectors,
+            kwargs_for_sample_betas = kwargs_for_sample_betas,
+            kwargs_for_sample_from_components = kwargs_for_sample_from_components,
+            _error_emissions_obj=error_emissions
+        )
+
+    def empirical_residual_distribution_weights(self, error_emissions_key: Any, posterior_vectors: _T, estimation_deviations: _T, kwargs_for_individual_component_likelihoods: dict = {}):
+        error_emissions = self.get_error_emissions(error_emissions_key)
+        return super(MultipleErrorEmissionsNonParametricSwapErrorsGenerativeModel, self).empirical_residual_distribution_weights(
+            posterior_vectors = posterior_vectors,
+            estimation_deviations = estimation_deviations,
+            kwargs_for_individual_component_likelihoods = kwargs_for_individual_component_likelihoods,
+            _error_emissions_obj=error_emissions
+        )
+
+    def drop_error_emissions(self, error_emissions_key):
+        self.error_emissions_keys.remove(error_emissions_key)
+        self.error_emissions.pop(str(error_emissions_key))
+
+
+
+class HierarchicalNonParametricSwapErrorsGenerativeModelWrapper(nn.Module):
+    """
+    We don't need a separate class for the sub-models (like for the variational) because there is no
+    real interaction between top level and sublevel models! 
+    Passing on function evaluations as prior means is all handled by HierarchicalWorkingMemoryFullSwapModel
+    """
+    def __init__(
+        self, 
+        primary_generative_model: NonParametricSwapErrorsGenerativeModel,
+        submodel_generative_models: Dict[Any, NonParametricSwapErrorsGenerativeModel],
+    ) -> None:
+        super().__init__()
+        
+        self.num_models = primary_generative_model.num_models
+        self.primary_generative_model = primary_generative_model
+        self.submodel_generative_models: Dict[str, NonParametricSwapErrorsGenerativeModel] = ModuleDict(
+            {str(k): v for k, v in submodel_generative_models.items()}
+        )
+        self.submodel_keys = list(submodel_generative_models.keys())
+        assert all(self.num_models == v.num_models for v in submodel_generative_models.values())
+
+        del self.primary_generative_model.error_emissions   # Should never be used!
+
+    @classmethod
+    def from_typical_args(
+        cls, *_, 
+        submodel_keys: List[Any],
+        num_models: int,
+        swap_type: str,
+        kernel_type: Optional[str],
+        emission_type: str,
+        fix_non_swap: bool,
+        remove_uniform: bool,
+        include_pi_u_tilde: bool,
+        include_pi_1_tilde: bool,
+        normalisation_inner: str,
+        shared_swap_function: bool,
+        shared_emission_distribution: bool,
+        all_set_sizes: List[int],
+        trainable_kernel_delta: bool,
+        num_features: int,
+        device = 'cuda',
+        **kwargs
+    ):
+        """
+        This is to replace the old setup_utils.py function logic!
+        """
+        primary_model = NonParametricSwapErrorsGenerativeModel.from_typical_args(
+            num_models = num_models,
+            swap_type = swap_type,
+            kernel_type = kernel_type,
+            emission_type = emission_type,
+            fix_non_swap = fix_non_swap,
+            remove_uniform = remove_uniform,
+            include_pi_u_tilde = include_pi_u_tilde,
+            include_pi_1_tilde = include_pi_1_tilde,
+            normalisation_inner = normalisation_inner,
+            shared_swap_function = shared_swap_function,
+            shared_emission_distribution = shared_emission_distribution,
+            all_set_sizes = all_set_sizes,
+            trainable_kernel_delta = trainable_kernel_delta,
+            num_features = num_features,
+            device = device,
+        )
+
+        submodels = {
+            smk: NonParametricSwapErrorsGenerativeModel.from_typical_args(
+                num_models = num_models,
+                swap_type = swap_type,
+                kernel_type = kernel_type,
+                emission_type = emission_type,
+                fix_non_swap = fix_non_swap,
+                remove_uniform = remove_uniform,
+                include_pi_u_tilde = include_pi_u_tilde,
+                include_pi_1_tilde = include_pi_1_tilde,
+                normalisation_inner = normalisation_inner,
+                shared_swap_function = shared_swap_function,
+                shared_emission_distribution = shared_emission_distribution,
+                all_set_sizes = all_set_sizes,
+                trainable_kernel_delta = trainable_kernel_delta,
+                num_features = num_features,
+                device = device,
+            ) for smk in submodel_keys
+        }
+
+        return cls(primary_model, submodels)
+    
+    def reduce_to_single_model(self, model_index: int = 0) -> None:
+        self.primary_generative_model.reduce_to_single_model(model_index)
+        [submodel.reduce_to_single_model(model_index) for submodel in self.submodel_generative_models.values()]
+
+    def get_marginalised_log_likelihood(
+        self, submodel_key: Any, estimation_deviations: _T, pi_vectors: _T, kwargs_for_individual_component_likelihoods: dict = {}
+    ):
+        """
+        Pass this on to the relevant submodel, which will contain the `downstream` parameters a.k.a. \phi
+        """
+        return self.submodel_generative_models[str(submodel_key)].get_marginalised_log_likelihood(
+            estimation_deviations=estimation_deviations, pi_vectors=pi_vectors,
+            kwargs_for_individual_component_likelihoods=kwargs_for_individual_component_likelihoods
+        )
+
+    def data_generation_from_component_priors(
+        self, submodel_key: Any, set_size: int, vm_means: _T, component_priors: _T, kwargs_for_sample_betas: dict = {}, kwargs_for_sample_from_components: dict = {}
+    ):
+        """
+        Again, defering like in self.get_marginalised_log_likelihood
+        """
+        return self.submodel_generative_models[str(submodel_key)].data_generation_from_component_priors(
+            set_size=set_size, vm_means=vm_means, component_priors=component_priors, 
+            kwargs_for_sample_betas=kwargs_for_sample_betas, kwargs_for_sample_from_components=kwargs_for_sample_from_components
+        )
+
+    def full_data_generation(self, submodel_key: Any, *args, **kwargs):
+        raise NotImplementedError
+
+    def drop_submodel(self, submodel_key):
+        self.submodel_keys.remove(submodel_key)
+        self.submodel_generative_models.pop(str(submodel_key))
+
+
 
 

@@ -36,6 +36,7 @@ class DatasetsUsedInBays2016SingleSetSize(EstimateDataLoaderBase):
         #subject_selected_target_zetas = subject_selected_target_zetas[~np.isnan(subject_selected_target_zetas).any(axis = 0)]
         #subject_selected_errors = subject_selected_errors[~np.isnan(subject_selected_errors).any(axis = 0)]
 
+        # Sometimes not all trials are completed
         if (np.isnan(subject_selected_deltas).any() or np.isnan(subject_selected_target_zetas).any() or np.isnan(subject_selected_errors).any()):
             assert (np.isnan(subject_selected_deltas).any(-1).any(-1) == np.isnan(subject_selected_target_zetas).any(-1).any(-1)).all()
             assert (np.isnan(subject_selected_deltas).any(-1).any(-1) == np.isnan(subject_selected_errors).any(-1)).all()
@@ -45,9 +46,15 @@ class DatasetsUsedInBays2016SingleSetSize(EstimateDataLoaderBase):
             subject_selected_target_zetas = subject_selected_target_zetas[mask]
             subject_selected_errors = subject_selected_errors[mask]
 
-        all_deltas = torch.tensor(subject_selected_deltas, device = device)    # [M, N, D (2)]
-        all_target_zetas = torch.tensor(subject_selected_target_zetas, device = device)    # [M, N, 1]
-        all_errors = torch.tensor(subject_selected_errors, device = device)    # [M, N]
+        # Some stimuli are not on the invisible circle...
+        usable_trials_mask = (subject_selected_deltas[:,1:,0] != 0).all(-1)
+        dropped_trials = (~usable_trials_mask).sum()
+        if dropped_trials > 0:
+            print(f'Dropping {dropped_trials} trials for N = {N}')
+
+        all_deltas = torch.tensor(subject_selected_deltas[usable_trials_mask], device = device)    # [M, N, D (2)]
+        all_target_zetas = torch.tensor(subject_selected_target_zetas[usable_trials_mask], device = device)    # [M, N, 1]
+        all_errors = torch.tensor(subject_selected_errors[usable_trials_mask], device = device)    # [M, N]
 
         super().__init__(all_deltas, all_errors, all_target_zetas, M_batch, M_test, num_repeats, device)
 
@@ -78,6 +85,12 @@ class DatasetsUsedInBays2016Envelope(MultipleSetSizesActivitySetDataGeneratorEnv
         y_loc = np.concatenate([y_loc_target[...,None], y_loc_distactor], -1)
         location_angles = np.arctan2(y_loc, x_loc)
         delta_cued = rectify_angles(location_angles - location_angles[...,[0]])
+
+        # example_location_angles = location_angles[:,2,:-10,:4]
+        # example_x_loc = x_loc[:,2,:-10,:4]
+        # example_y_loc = y_loc[:,2,:-10,:4]
+        # import matplotlib.pyplot as plt
+        # plt.scatter(example_x_loc.flatten(), example_y_loc.flatten(), c = example_location_angles.flatten())
 
         # Actual estimated feature values
         if dataset_mat['target'].size:

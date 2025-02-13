@@ -12,6 +12,7 @@ from purias_utils.error_modelling_torus.non_parametric_error_model.generative_mo
 from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angles
 
 from abc import abstractmethod, ABC
+from math import log as mathlog
 
 GROUPING_THRES = 1e-3
 
@@ -84,6 +85,10 @@ class SwapFunctionBase(nn.Module, ABC):
     def evaluate_kernel_inner(self, differences_matrix: _T) -> _T:
         raise NotImplementedError
 
+    @abstractmethod
+    def sample_from_prior(self, set_size: _T, eval_points: _T, num_samples: int) -> Dict[str, _T]:
+        raise NotImplementedError
+
     def generate_exp_pi_u_tilde(self, set_size, I: int, M: int, dtype, device): # [Q, I, M, 1]
         Q = self.num_models
         if self.remove_uniform:
@@ -154,8 +159,7 @@ class NonParametricSwapFunctionBase(SwapFunctionBase):
         if self.fix_non_swap:
             assert (exp_grid[...,1] == 0.0).all(), "To learn pi_1_tilde, swap variational model cannot generate it!"
             exp_grid[...,[1]] = self.generate_exp_pi_1_tilde(set_size, I, M, model_evaulations.dtype, model_evaulations.device)
-        denominator = exp_grid.sum(-1, keepdim=True)                                        # [Q, I, M, 1]
-        pis = exp_grid / denominator
+        pis = exp_grid / exp_grid.sum(-1, keepdim=True)                                        # [Q, I, M, 1]
         if make_spike_and_slab:
             print("Flattening swap function to spike and slab! Only recommended if whole dataset is being passed!")
             pis = pis.mean(2, keepdim=True) # [Q, I, 1, N+1]
@@ -196,6 +200,26 @@ class NonParametricSwapFunctionBase(SwapFunctionBase):
 
         return total_kernal_eval
 
+    def sample_from_prior(self, set_size, eval_points, num_samples, existing_samples = None):
+        """
+        Sample K times from prior at the points provided, and return log-likleihoods, as well as kernel matrix at those points
+        """
+        K_uu = self.evaluate_kernel(set_size, eval_points)  # [Q, R, R], eval points size checked here!
+        K_uu_chol = torch.cholesky(K_uu)    # [Q, R, R]
+        R = K_uu_chol.shape[-1]
+        if existing_samples is None:
+            eps = torch.randn(self.num_models, num_samples, R, dtype = K_uu_chol.dtype, device = K_uu_chol.device) # [Q, K, R]
+            samples = torch.bmm(eps, K_uu_chol.transpose(-1, -2))
+        else:
+            assert tuple(samples.shape) == (self.num_models, num_samples, eval_points.shape[1])
+        original_lhs = mathlog((2 * torch.pi)**(-R / 2.)) + (-0.5 * (eps * eps).sum(-1))                        # [Q, K]
+        cholesky_log_determinant = K_uu_chol.diagonal(offset = 0, dim1 = -1, dim2 = -2).log().sum(-1,keepdim=True)        # [Q, 1]
+        new_llhs = original_lhs - cholesky_log_determinant
+        return {
+            'samples': samples, # [Q, K, R]
+            'sample_log_likelihoods': new_llhs,   # [Q, K]
+        }
+
 
 class NonParametricSwapFunctionExpCos(NonParametricSwapFunctionBase):
 
@@ -216,7 +240,6 @@ class NonParametricSwapFunctionExpCos(NonParametricSwapFunctionBase):
         return self.kernel_holder[str(set_size)].scaler * scaled_exp_cos_matrix_total # [Q,N1,N2]
 
 
-
 class NonParametricSwapFunctionWeiland(NonParametricSwapFunctionExpCos):
 
     def evaluate_kernel_inner(self, set_size: int, differences_matrix: _T):
@@ -225,7 +248,6 @@ class NonParametricSwapFunctionWeiland(NonParametricSwapFunctionExpCos):
         x = rectify_angles(differences_matrix).abs()                    # [Q,N1,N2,D]
         weiland_matrix: _T = (1 + inverse_ells * x / torch.pi) * (1.0 - x / torch.pi).relu().pow(inverse_ells)  # [Q,N1,N2,D]
         return self.kernel_holder[str(set_size)].scaler * weiland_matrix.prod(-1)   # [Q,N1,N2]
-
 
 
 class SpikeAndSlabSwapFunction(SwapFunctionBase):
@@ -257,6 +279,9 @@ class SpikeAndSlabSwapFunction(SwapFunctionBase):
                 PiTildeHolder(2.0, num_models) if logits_set_sizes is None 
                 else nn.ModuleDict({str(N): PiTildeHolder(2.0, num_models) for N in logits_set_sizes})
             )
+
+    def sample_from_prior(self, set_size: _T, eval_points: _T, num_samples: int) -> Dict[str, _T]:
+        raise TypeError('SpikeAndSlabSwapFunction has no kernel!')
 
     def evaluate_kernel(self, set_size: int, data_1: _T, data_2: _T = None) -> _T:
         raise TypeError('SpikeAndSlabSwapFunction has no kernel!')
@@ -292,3 +317,4 @@ class SpikeAndSlabSwapFunction(SwapFunctionBase):
         denominator = exp_grid.sum(-1, keepdim=True)                                            # [Q, M, 1]
         pis = exp_grid / denominator
         return {'pis': pis, 'exp_grid': exp_grid}
+

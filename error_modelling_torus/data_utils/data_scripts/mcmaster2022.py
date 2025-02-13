@@ -34,6 +34,9 @@ class McMaster2022SingleSetSize(EstimateDataLoaderBase):
         across_subjects_target_zetas = []
         across_subjects_errors = []
 
+        all_subject_idxs = []
+        # all_stimulus_strengths = []
+
         for subject in subjects:
             subject_struct = subject_structs[subject]
 
@@ -88,6 +91,10 @@ class McMaster2022SingleSetSize(EstimateDataLoaderBase):
             across_subjects_target_zetas.append(subject_target_zetas)
             across_subjects_errors.append(subject_errors)
 
+            # Extend metadata
+            all_subject_idxs.extend([subject] * len(subject_deltas))
+            # all_stimulus_strengths.extend(new_strengths.tolist())
+
         all_deltas = torch.concat(across_subjects_deltas, 0)
         all_target_zetas = torch.concat(across_subjects_target_zetas, 0)
         all_errors = torch.concat(across_subjects_errors, 0).squeeze(-1)
@@ -95,11 +102,16 @@ class McMaster2022SingleSetSize(EstimateDataLoaderBase):
         self.subjects = subjects
         self.stimulus_strength_feature = stimulus_strength_feature
 
+        all_metadata = {
+            'subject_idx': all_subject_idxs,
+            # 'stimulus_strength': all_stimulus_strengths,
+        }
+
         if ori_dim_idx is not None:
             # all_deltas[...,ori_dim_idx] = all_deltas[...,ori_dim_idx] / 2.
             all_deltas[...,ori_dim_idx] = rectify_angles(all_deltas[...,ori_dim_idx] * 2.)
 
-        super().__init__(all_deltas, all_errors, all_target_zetas, M_batch, M_test, num_repeats, device)
+        super().__init__(all_deltas, all_errors, all_target_zetas, all_metadata, M_batch, M_test, num_repeats, device)
 
 
 class McMaster2022Exp3SingleSetSize(EstimateDataLoaderBase):

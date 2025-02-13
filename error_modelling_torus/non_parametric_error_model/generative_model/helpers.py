@@ -41,7 +41,13 @@ class HolderBase(nn.Module):
     def reduce_to_single_model(self, model_index: int = 0) -> None:
         self.num_models = 1
         for name, param in self.named_parameters():
-            self.register_parameter(name, nn.Parameter(param[[model_index]], requires_grad = True))
+            new_param = param[[model_index]]
+            print(f'{name} reduced from {param.shape} to {new_param.shape}')
+            self.register_parameter(name, nn.Parameter(new_param, requires_grad = True))
+        for name, param in self.named_buffers():
+            new_param = param[[model_index]]
+            print(f'{name} reduced from {param.shape} to {new_param.shape}')
+            self.register_buffer(name, nn.Parameter(new_param, requires_grad = True))
 
 
 class KernelParameterHolder(HolderBase):
@@ -51,11 +57,14 @@ class KernelParameterHolder(HolderBase):
 
         self.num_features = num_features
 
-        log_scaler_raw = (1.0 + torch.relu(2.0 + (0.6 * torch.randn([num_models])))).log().to(torch.float64)
-        log_inverse_ells_raw = (1.0 + torch.relu(5.0 + (1.5 * torch.randn([num_models, num_features])))).log().to(torch.float64)
+        log_scaler_raw = (1.0 + torch.relu(2.0 + (0.6 * torch.randn([num_models, 1])))).log().to(torch.float64)
+        if num_features > 0:
+            self.register_parameter('log_scaler', nn.Parameter(log_scaler_raw, requires_grad = True))
+        else:
+            self.register_buffer('log_scaler', log_scaler_raw * torch.nan)
         
+        log_inverse_ells_raw = (1.0 + torch.relu(5.0 + (1.5 * torch.randn([num_models, num_features])))).log().to(torch.float64)
         self.register_parameter('log_inverse_ells', nn.Parameter(log_inverse_ells_raw, requires_grad = True))
-        self.register_parameter('log_scaler', nn.Parameter(log_scaler_raw, requires_grad = True))
         
         if trainable_kernel_delta:
             log_kernel_noise_sigma_raw = (torch.tensor(0.00001)).log().to(torch.float64)
@@ -106,19 +115,24 @@ class DoubleConcentrationParameterHolder(HolderBase):
     """
     This is a bit of a weird case where we want two concentrations but want one to be always not greater than the other
     """
+    MAX_CONC = 200
+
     def __init__(self, num_models: int):
         super().__init__(num_models)
-        log_larger_concentration_raw = (8 + (0.3 * torch.randn(num_models)).exp()).log().to(torch.float64)
-        log_smaller_concentration_raw = (12 + (0.3 * torch.randn(num_models)).exp()).log().to(torch.float64)
+        log_larger_concentration_raw = (12 + (0.3 * torch.randn(num_models)).exp()).log().to(torch.float64)
+        log_smaller_concentration_raw = (8 + (0.3 * torch.randn(num_models)).exp()).log().to(torch.float64)
         # smaller_concentration_ratio_raw = (0.2 * torch.randn(num_models)).to(torch.float64)
         self.register_parameter('log_larger_concentration', nn.Parameter(log_larger_concentration_raw, requires_grad = True))
         self.register_parameter('log_smaller_concentration', nn.Parameter(log_smaller_concentration_raw, requires_grad = True))
         # self.register_parameter('smaller_concentration_ratio_raw', nn.Parameter(smaller_concentration_ratio_raw, requires_grad = True))
+        self.replacement_conc_array = torch.ones_like(self.log_smaller_concentration) * self.MAX_CONC
 
     @property
     def concentrations(self):
         larger_concentration = self.log_larger_concentration.exp()
+        larger_concentration = larger_concentration.clip(max = self.replacement_conc_array.to(larger_concentration.device))
         smaller_concentration = self.log_smaller_concentration.exp()
+        smaller_concentration = smaller_concentration.clip(max = self.replacement_conc_array.to(smaller_concentration.device))
         # smaller_concentration_as_ratio = self.smaller_concentration_ratio_raw.sigmoid()
         # smaller_concentration = smaller_concentration_as_ratio * larger_concentration
         return larger_concentration, smaller_concentration
@@ -145,7 +159,7 @@ class StableAlphaHolder(HolderBase):
 class StableGammaHolder(HolderBase):
     def __init__(self, num_models: int):
         super().__init__(num_models)
-        gamma_raw = (0.5 * torch.randn(num_models)).to(torch.float64)
+        gamma_raw = (- 0.1 * torch.randn(num_models)).to(torch.float64)
         self.register_parameter('gamma_raw', nn.Parameter(gamma_raw, requires_grad = True))
 
     @property

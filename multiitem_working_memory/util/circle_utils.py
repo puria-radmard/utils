@@ -5,7 +5,13 @@ import torch
 from math import pi, floor
 from random import random
 
-def rectify_angles(x, scale_lower=-np.pi, scale_upper=np.pi):
+
+def polar2cart(rs, thetas):
+    x = rs * np.cos(thetas)
+    y = rs * np.sin(thetas)
+    return x, y
+
+def rectify_angles(x, scale_lower=-np.pi, scale_upper=np.pi) -> _T:
     if isinstance(x, _T) and x.names is not None:
         names = x.names
         x = x.rename(None)

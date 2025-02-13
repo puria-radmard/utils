@@ -182,8 +182,6 @@ def generate_circular_feature_list(batch_size, num_stim, feature_border, existin
         real_estate is now two arrays, each of shape [batch_size, num_intervals], giving the ccw and cw points
             of these intervals. num_intervals is the same for all batch members because circular_interval_remove
             always outputs two intervals
-
-        
     """
     # Generate num_stim features around a 2pi circle, with each element having feature_border on either side
     # Of course, if num_stim * 2 * feature_border >= 2 * pi then this throws an error because that's impossible

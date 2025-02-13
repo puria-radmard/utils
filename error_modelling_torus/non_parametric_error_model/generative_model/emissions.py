@@ -18,7 +18,7 @@ from purias_utils.multiitem_working_memory.util.circle_utils import rectify_angl
 from abc import abstractmethod, ABC
 
 
-VALID_EMISSION_TYPES = ['von_mises', 'wrapped_cauchy', 'wrapped_stable', 'uniform']
+VALID_EMISSION_TYPES = ['von_mises', 'wrapped_cauchy', 'wrapped_stable', 'uniform', 'double_von_mises']
 
 
 
@@ -75,7 +75,7 @@ class ErrorsEmissionsBase(nn.Module, ABC):
                     if comp_means.numel() > 0:
                         assert sample_set[q, where_selected[q]].unique().item() == 0.0
                         samples = self.generate_samples(comp_means, set_size, q, **kwargs)     # [num selected]
-                        sample_set[q, where_selected[q]] = samples                                   # slotted back into samples
+                        sample_set[q, where_selected[q]] = samples.to(sample_set.dtype)                                   # slotted back into samples
 
         return sample_set       # [M]
 
@@ -198,7 +198,7 @@ class WrappedStableParametricErrorsEmissions(ParametricErrorsEmissionsBase):
     def individual_component_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T, alpha: Optional[float] = None, gamma: Optional[float] = None):
         "Method taken from Arthur Pewsey, 2008"
         # assert estimation_deviations.shape[-1] == set_size 
-        assert estimation_deviations.shape[0] == self.num_models
+        assert estimation_deviations.shape[0] == self.num_models, estimation_deviations.shape[0]
 
         if alpha is None:
             alpha = self.alpha_stability_holder[str(set_size)].alpha    # [Q]
@@ -237,8 +237,11 @@ class DoubleVonMisesParametricErrorsEmissions(ParametricErrorsEmissionsBase):
 
     def __init__(self, num_models: int, emissions_set_sizes: list) -> None:
         super().__init__(num_models, emissions_set_sizes)
-        assert emissions_set_sizes is None, "DoubleVonMisesParametricErrorsEmissions current not meant to be used for N > 1"
-        self.double_conc_holder = DoubleConcentrationParameterHolder(num_models)
+        # assert emissions_set_sizes is None, "DoubleVonMisesParametricErrorsEmissions current not meant to be used for N > 1"
+        self.double_conc_holder = (
+            DoubleConcentrationParameterHolder(num_models) if emissions_set_sizes is None
+            else nn.ModuleDict({str(N): DoubleConcentrationParameterHolder(num_models) for N in emissions_set_sizes})
+        )
 
     def reduce_to_single_model(self, model_index: int = 0) -> None:
         self.num_models = 1
@@ -252,7 +255,6 @@ class DoubleVonMisesParametricErrorsEmissions(ParametricErrorsEmissionsBase):
         raise NotImplementedError
 
     def individual_component_likelihoods_from_estimate_deviations_inner(self, set_size: int, estimation_deviations: _T):
-        assert set_size == 1, "DoubleVonMisesParametricErrorsEmissions current not meant to be used for N > 1"
         assert estimation_deviations.shape[0] == self.num_models
 
         larger_concentration, smaller_concentration = self.double_conc_holder[str(set_size)].concentrations
